@@ -1,0 +1,21 @@
+# Python / Environment
+backend/venv/
+backend/__pycache__/
+*.pyc
+.env
+
+# AI Weights and Datasets (DO NOT UPLOAD TO GITHUB)
+backend/ai_engine/weights/*.pt
+backend/ai_engine/weights/*.pth
+backend/ai_engine/dataset/
+*.mp4
+*.avi
+
+# Node / Frontend
+frontend/node_modules/
+frontend/build/
+.env.local
+
+# OS Generated Files
+.DS_Store
+Thumbs.db
