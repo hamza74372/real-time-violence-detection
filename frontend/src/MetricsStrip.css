@@ -1,0 +1,204 @@
+/* ── MetricsStrip.css ─────────────────────────────────────────────────────── */
+
+:root {
+  --m-green:  #16a34a;
+  --m-amber:  #d97706;
+  --m-red:    #dc2626;
+  --m-blue:   #0284c7;
+  --m-text:   #0f172a;
+  --m-muted:  #64748b;
+  --m-bg:     #ffffff;
+  --m-border: rgba(148, 163, 184, 0.35);
+  --m-strip-h: 52px;
+}
+
+/* ── Strip shell ──────────────────────────────────────────────────────────── */
+.metrics-strip {
+  display: flex;
+  align-items: center;
+  height: var(--m-strip-h);
+  background: var(--m-bg);
+  border-top: 0.5px solid var(--m-border);
+  border-bottom: 0.5px solid var(--m-border);
+  padding: 0 20px;
+  gap: 0;
+  flex-shrink: 0;
+  font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Subtle top highlight line — makes it look machined */
+.metrics-strip::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(2,132,199,0.3) 30%, rgba(2,132,199,0.3) 70%, transparent);
+}
+
+/* Health-based strip accent */
+.health-nominal  { border-top-color: rgba(22,163,74,0.4); }
+.health-degraded { border-top-color: rgba(217,119,6,0.5); }
+.health-critical {
+  border-top-color: rgba(220,38,38,0.6);
+  animation: stripFlash 2s ease-in-out infinite;
+}
+@keyframes stripFlash {
+  0%,100% { background: var(--m-bg); }
+  50%     { background: rgba(220,38,38,0.03); }
+}
+
+/* Offline / error states */
+.metrics-offline,
+.metrics-error {
+  justify-content: center;
+  gap: 10px;
+  background: #f8fafc;
+}
+.metrics-offline-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 2px;
+  color: #94a3b8;
+}
+.metrics-err-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #dc2626;
+  animation: dotBlink 1s infinite alternate;
+}
+@keyframes dotBlink { from { opacity: 1; } to { opacity: 0.2; } }
+
+/* ── Health pill (left anchor) ───────────────────────────────────────────── */
+.metrics-health-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  padding-right: 16px;
+}
+
+.health-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+/* Pulsing dot */
+.health-pulse {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.pulse-nominal  { background: var(--m-green); animation: pulseGreen 2.5s ease-in-out infinite; }
+.pulse-degraded { background: var(--m-amber); animation: pulseAmber 1.8s ease-in-out infinite; }
+.pulse-critical { background: var(--m-red);   animation: pulseRed   1s   ease-in-out infinite; }
+.pulse-initialising { background: #94a3b8; }
+
+@keyframes pulseGreen  { 0%,100%{box-shadow:0 0 0 0 rgba(22,163,74,0.5)}  50%{box-shadow:0 0 0 5px rgba(22,163,74,0)} }
+@keyframes pulseAmber  { 0%,100%{box-shadow:0 0 0 0 rgba(217,119,6,0.5)}  50%{box-shadow:0 0 0 5px rgba(217,119,6,0)} }
+@keyframes pulseRed    { 0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,0.6)}  50%{box-shadow:0 0 0 6px rgba(220,38,38,0)} }
+
+/* ── Divider ─────────────────────────────────────────────────────────────── */
+.metrics-divider {
+  width: 0.5px;
+  height: 28px;
+  background: var(--m-border);
+  flex-shrink: 0;
+  margin: 0 16px;
+}
+
+/* ── Metric tile ─────────────────────────────────────────────────────────── */
+.metric-tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  flex-shrink: 0;
+  min-width: 90px;
+}
+.tile-wide { min-width: 120px; }
+
+.tile-label {
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 1.8px;
+  color: var(--m-muted);
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.tile-value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  line-height: 1;
+}
+
+.tile-value {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--m-text);
+  letter-spacing: -0.5px;
+  transition: color 0.4s ease;
+}
+
+.tile-unit {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--m-muted);
+  margin-bottom: 1px;
+}
+
+.tile-status-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  margin-bottom: 2px;
+  flex-shrink: 0;
+}
+.dot-green { background: var(--m-green); }
+.dot-amber { background: var(--m-amber); }
+.dot-red   { background: var(--m-red); }
+
+.tile-spark {
+  line-height: 0;
+  margin-top: 1px;
+}
+
+.tile-sub {
+  font-size: 0.55rem;
+  color: var(--m-muted);
+  letter-spacing: 0.3px;
+  line-height: 1;
+}
+
+/* ── Uptime (right anchor) ───────────────────────────────────────────────── */
+.metrics-uptime {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding-left: 16px;
+  margin-left: auto;
+}
+
+.uptime-value {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0284c7;
+  letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Responsive: hide sparklines on narrow viewports ────────────────────── */
+@media (max-width: 1100px) {
+  .tile-spark { display: none; }
+  .metrics-divider { margin: 0 10px; }
+}
+
+@media (max-width: 860px) {
+  .tile-sub { display: none; }
+  .metric-tile { min-width: 70px; }
+}
