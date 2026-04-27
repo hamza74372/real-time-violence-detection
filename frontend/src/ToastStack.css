@@ -1,0 +1,304 @@
+/* ToastStack.css — soft light theme, tokens from App.css :root */
+
+/* ── Stack container ─────────────────────────────────────────────────────── */
+.toast-stack {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 999;
+  display: flex;
+  flex-direction: column-reverse; /* newest at bottom */
+  gap: 8px;
+  width: 340px;
+  pointer-events: none; /* let clicks pass through gap areas */
+}
+
+/* ── Individual card ─────────────────────────────────────────────────────── */
+.toast-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 12px 36px 12px 10px; /* right pad for dismiss btn */
+  box-shadow: var(--shadow-lg);
+  pointer-events: all;
+  overflow: hidden;
+  animation: toastSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes toastSlideIn {
+  from { opacity: 0; transform: translateX(24px) scale(0.97); }
+  to   { opacity: 1; transform: translateX(0)   scale(1); }
+}
+
+/* ── Left accent bar ─────────────────────────────────────────────────────── */
+.toast-accent-bar {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+}
+
+/* ── Type variants ───────────────────────────────────────────────────────── */
+.toast-threat .toast-accent-bar  { background: var(--red); }
+.toast-warning .toast-accent-bar { background: var(--amber); }
+.toast-success .toast-accent-bar { background: var(--green); }
+.toast-info .toast-accent-bar    { background: var(--accent); }
+
+.toast-threat  { border-color: var(--red-border);    background: var(--red-light); }
+.toast-warning { border-color: var(--amber-border);  background: var(--amber-light); }
+.toast-success { border-color: var(--green-border);  background: var(--green-light); }
+.toast-info    { border-color: var(--accent-mid);    background: var(--accent-light); }
+
+/* ── Icon ────────────────────────────────────────────────────────────────── */
+.toast-icon-wrap {
+  width: 28px; height: 28px;
+  border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.toast-threat  .toast-icon-wrap { background: var(--red-mid);    color: var(--red-text); }
+.toast-warning .toast-icon-wrap { background: var(--amber-border); color: var(--amber-text); }
+.toast-success .toast-icon-wrap { background: var(--green-border); color: var(--green-text); }
+.toast-info    .toast-icon-wrap { background: var(--accent-mid);   color: var(--accent-text); }
+
+/* Threat icon pulses when violence is active */
+.toast-threat .toast-icon-wrap {
+  animation: iconPulse 1.4s ease-in-out infinite;
+}
+@keyframes iconPulse {
+  0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.3); }
+  50%      { box-shadow: 0 0 0 5px rgba(220,38,38,0); }
+}
+
+/* ── Content ─────────────────────────────────────────────────────────────── */
+.toast-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.toast-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.toast-title {
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.toast-time {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-weight: 300;
+}
+
+.toast-message {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  font-weight: 300;
+  line-height: 1.4;
+}
+
+/* Meta row: camera badge + confidence */
+.toast-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.toast-cam-badge {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 500;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.toast-threat  .toast-cam-badge { background: var(--red-light);   color: var(--red-text);   border-color: var(--red-border); }
+.toast-warning .toast-cam-badge { background: var(--amber-light); color: var(--amber-text); border-color: var(--amber-border); }
+
+.toast-conf {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  color: var(--text-muted);
+  font-weight: 300;
+}
+
+/* ── Action buttons ──────────────────────────────────────────────────────── */
+.toast-actions {
+  display: flex;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.toast-action-btn {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.12s ease;
+  letter-spacing: 0.2px;
+}
+
+.btn-view {
+  background: var(--surface);
+  color: var(--accent-text);
+  border: 1px solid var(--accent-mid);
+}
+.btn-view:hover {
+  background: var(--accent-light);
+}
+
+.btn-ack {
+  background: var(--red);
+  color: #fff;
+  border: none;
+  box-shadow: 0 1px 4px rgba(220,38,38,0.3);
+}
+.btn-ack:hover {
+  background: var(--red-text);
+}
+
+/* ── Dismiss button ──────────────────────────────────────────────────────── */
+.toast-dismiss {
+  position: absolute;
+  top: 8px; right: 8px;
+  width: 20px; height: 20px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.12s ease;
+  padding: 0;
+}
+.toast-dismiss:hover {
+  background: rgba(15,23,46,0.08);
+  color: var(--text-primary);
+}
+
+/* ── Progress bar ────────────────────────────────────────────────────────── */
+.toast-progress-track {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 2px;
+  background: rgba(15,23,46,0.06);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  overflow: hidden;
+}
+
+.toast-progress-bar {
+  height: 100%;
+  width: 100%;
+  border-radius: inherit;
+}
+
+.toast-threat  .toast-progress-bar { background: var(--red); }
+.toast-warning .toast-progress-bar { background: var(--amber); }
+.toast-success .toast-progress-bar { background: var(--green); }
+.toast-info    .toast-progress-bar { background: var(--accent); }
+
+/* ── Push permission banner ──────────────────────────────────────────────── */
+.push-permission-banner {
+  position: fixed;
+  top: 68px; /* just below nav */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 998;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--accent-mid);
+  border-radius: var(--radius-lg);
+  padding: 10px 16px;
+  box-shadow: var(--shadow-lg);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  animation: bannerDrop 0.3s cubic-bezier(0.16,1,0.3,1) forwards;
+  white-space: nowrap;
+}
+@keyframes bannerDrop {
+  from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.push-banner-icon {
+  width: 28px; height: 28px;
+  background: var(--accent-light);
+  border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent-text);
+  flex-shrink: 0;
+}
+.push-banner-text { font-weight: 400; }
+.push-banner-text strong { font-weight: 600; color: var(--text-primary); }
+.push-banner-allow {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  padding: 5px 12px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+  box-shadow: 0 2px 6px rgba(79,110,247,0.25);
+}
+.push-banner-allow:hover { background: var(--accent-hover); }
+.push-banner-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 4px 6px;
+  border-radius: var(--radius-xs);
+  transition: all 0.12s;
+}
+.push-banner-dismiss:hover { background: var(--surface-3); color: var(--text-primary); }
+
+/* ── Sound mode pill in nav ──────────────────────────────────────────────── */
+.sound-mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 500;
+  padding: 5px 10px;
+  background: var(--surface-3);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  cursor: pointer;
+  transition: all 0.12s ease;
+  white-space: nowrap;
+}
+.sound-mode-btn:hover { background: var(--surface-4); border-color: var(--border-mid); }
+.sound-mode-btn.sound-active { background: var(--accent-light); color: var(--accent-text); border-color: var(--accent-mid); }
+.sound-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
