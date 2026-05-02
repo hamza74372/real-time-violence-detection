@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './CameraConfigPanel.css';
 
-const API_BASE = 'http://127.0.0.1:8000/api';
+import { API_BASE } from './config';
 const ZONES    = ['ZONE-A', 'ZONE-B', 'ZONE-C', 'ZONE-D', 'ZONE-E', 'ZONE-F'];
 const EMPTY    = { name:'', location:'', zone:'ZONE-A', rtsp_url:'', is_active:true, is_ai:false };
 

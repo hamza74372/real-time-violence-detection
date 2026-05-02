@@ -9,15 +9,11 @@ import { useAuth }       from './AuthContext';
 import LoginScreen       from './LoginScreen';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
-const PYTHON_STREAM = "http://127.0.0.1:8000/api/video_feed";
-const API_BASE      = "http://127.0.0.1:8000/api";
+import { API_BASE, API_HOST } from './config';
 
-const CAMERA_NETWORK = [
-  { id: 1, name: "CAM-01", location: "Main St / Central",  zone: "ZONE-A", status: "AI ACTIVE", type: "live",      url: PYTHON_STREAM },
-  { id: 2, name: "CAM-02", location: "Subway Entrance",    zone: "ZONE-B", status: "STANDBY",   type: "simulated", bg: "#f1f5f9" },
-  { id: 3, name: "CAM-03", location: "Riverside Park",     zone: "ZONE-C", status: "NO SIGNAL", type: "error",     bg: "#f8fafc" },
-  { id: 4, name: "CAM-04", location: "Financial District", zone: "ZONE-D", status: "STANDBY",   type: "simulated", bg: "#f1f5f9" },
-];
+const PYTHON_STREAM = `${API_HOST}/api/video_feed`;
+
+// CAMERA_NETWORK removed — matrix now driven by dbCameras from the API
 
 const ZONE_LAYOUT = [
   { id: "ZONE-A", label: "Central",   x: 42, y: 28, w: 28, h: 22 },
@@ -69,13 +65,13 @@ function MiniSparkline({ data = [] }) {
 }
 
 // ─── CITY ZONE MAP ────────────────────────────────────────────────────────────
-function CityZoneMap({ isViolent, onCamSelect, focusedCam }) {
+function CityZoneMap({ isViolent, onCamSelect, focusedCam, cameras = [] }) {
   const zoneStatus = (zoneId) => {
-    const cam = CAMERA_NETWORK.find(c => c.zone === zoneId);
+    const cam = cameras.find(c => c.zone === zoneId);
     if (!cam) return 'offline';
     if (cam.id === 1 && isViolent) return 'threat';
-    if (cam.status === 'AI ACTIVE') return 'active';
-    if (cam.status === 'NO SIGNAL') return 'offline';
+    if (cam.is_ai) return 'active';
+    if (!cam.is_active) return 'offline';
     return 'standby';
   };
   const COLORS = { threat:'#dc2626', active:'#0284c7', standby:'#cbd5e1', offline:'#e2e8f0' };
@@ -107,11 +103,11 @@ function CityZoneMap({ isViolent, onCamSelect, focusedCam }) {
             </g>
           );
         })}
-        {CAMERA_NETWORK.map(cam => {
-          const p       = CAM_PIN_POS[cam.id];
+        {cameras.map((cam, idx) => {
+          const p       = CAM_PIN_POS[cam.id] || { x: 15 + (idx % 5) * 18, y: 15 + Math.floor(idx / 5) * 20 };
           const threat  = cam.id === 1 && isViolent;
           const focused = focusedCam === cam.id;
-          const col     = threat ? '#dc2626' : cam.status === 'AI ACTIVE' ? '#0284c7' : cam.status === 'NO SIGNAL' ? '#cbd5e1' : '#94a3b8';
+          const col     = threat ? '#dc2626' : cam.is_ai ? '#0284c7' : !cam.is_active ? '#cbd5e1' : '#94a3b8';
           return (
             <g key={cam.id} onClick={() => onCamSelect(cam.id)} style={{ cursor:'pointer' }}>
               {focused && <circle cx={p.x} cy={p.y} r="4" fill="none" stroke={col} strokeWidth="0.4" opacity="0.5" />}
@@ -171,6 +167,17 @@ function IncidentTriagePanel({ incidents, onAction, alarmsArmed }) {
                   <span className="tc-conf-label">{inc.confidence}%</span>
                 </div>
               )}
+              {inc.snapshot_path && (
+                <div style={{ marginTop:6 }}>
+                  <img
+                    src={`${API_HOST}${inc.snapshot_path}`}
+                    alt="Evidence snapshot"
+                    style={{ width:'100%', maxHeight:120, objectFit:'cover', borderRadius:4, border:'1px solid var(--border)' }}
+                    onError={e => e.target.style.display='none'}
+                  />
+                  <div style={{ fontSize:'0.55rem', color:'var(--text-muted)', fontFamily:'var(--font-mono)', marginTop:2 }}>📷 EVIDENCE FRAME</div>
+                </div>
+              )}
               {st === 'UNREVIEWED' && (
                 <div className="tc-actions">
                   <button className="tc-btn btn-confirm"  onClick={() => onAction(inc.id,'CONFIRMED')}>✓ Confirm</button>
@@ -190,20 +197,35 @@ function IncidentTriagePanel({ incidents, onAction, alarmsArmed }) {
 }
 
 // ─── ANALYTICS ────────────────────────────────────────────────────────────────
-function AnalyticsDashboard({ incidents }) {
+function AnalyticsDashboard({ incidents, cameras = [] }) {
+  const [range, setRange] = useState('all');
+
+  const now = Date.now();
+  const RANGES = [
+    { key:'24h', label:'24 h' },
+    { key:'7d',  label:'7 d'  },
+    { key:'30d', label:'30 d' },
+    { key:'all', label:'All'  },
+  ];
+  const filtered = incidents.filter(inc => {
+    if (range === 'all') return true;
+    const ms = { '24h': 864e5, '7d': 6048e5, '30d': 2592e6 }[range];
+    return now - new Date(inc.timestamp).getTime() < ms;
+  });
+
   const hours = Array.from({ length:24 }, (_,h) => ({ h, count:0 }));
-  incidents.forEach(inc => { try { hours[new Date(inc.timestamp).getHours()].count++; } catch {} });
+  filtered.forEach(inc => { try { hours[new Date(inc.timestamp).getHours()].count++; } catch {} });
   const maxH = Math.max(...hours.map(h => h.count), 1);
 
-  const confirmed  = incidents.filter(i => i.review_status==='CONFIRMED').length;
-  const dismissed  = incidents.filter(i => i.review_status==='DISMISSED').length;
-  const unreviewed = incidents.filter(i => !i.review_status||i.review_status==='UNREVIEWED').length;
-  const total      = incidents.length;
+  const confirmed  = filtered.filter(i => i.review_status==='CONFIRMED').length;
+  const dismissed  = filtered.filter(i => i.review_status==='DISMISSED').length;
+  const unreviewed = filtered.filter(i => !i.review_status||i.review_status==='UNREVIEWED').length;
+  const total      = filtered.length;
   const accuracy   = total>0 ? Math.round((confirmed/Math.max(confirmed+dismissed,1))*100) : 0;
 
-  const camBars = CAMERA_NETWORK.map(c => ({
+  const camBars = cameras.map(c => ({
     name: c.name,
-    count: incidents.filter(i => i.camera===c.name||(!i.camera&&c.id===1)).length,
+    count: filtered.filter(i => i.camera===c.name||(!i.camera&&c.id===1)).length,
   }));
   const maxCam = Math.max(...camBars.map(c => c.count), 1);
 
@@ -227,6 +249,27 @@ function AnalyticsDashboard({ incidents }) {
 
   return (
     <div className="analytics-root">
+      {/* Date range selector */}
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12 }}>
+        <span style={{ fontSize:'0.65rem', fontFamily:'var(--font-mono)', color:'var(--text-muted)', letterSpacing:'0.08em' }}>TIME RANGE</span>
+        {RANGES.map(r => (
+          <button key={r.key}
+            onClick={() => setRange(r.key)}
+            style={{
+              padding:'3px 10px', borderRadius:4, fontSize:'0.65rem',
+              fontFamily:'var(--font-mono)', cursor:'pointer', border:'1px solid',
+              borderColor: range===r.key ? 'var(--accent)' : 'var(--border)',
+              background:  range===r.key ? 'var(--accent)' : 'transparent',
+              color:       range===r.key ? '#fff' : 'var(--text-muted)',
+              transition:'all 0.15s',
+            }}>
+            {r.label}
+          </button>
+        ))}
+        <span style={{ marginLeft:'auto', fontSize:'0.65rem', fontFamily:'var(--font-mono)', color:'var(--text-muted)' }}>
+          {filtered.length} records
+        </span>
+      </div>
       <div className="kpi-row">
         {[
           { label:'TOTAL INCIDENTS',  value:total,         color:'var(--text-primary)' },
@@ -305,7 +348,7 @@ function AnalyticsDashboard({ incidents }) {
 
       <div className="analytics-footer">
         <button className="btn-export" onClick={exportCSV}>⬇ Export CSV</button>
-        <span className="analytics-note">{incidents.length} records · Live SQLite sync</span>
+        <span className="analytics-note">{filtered.length} records · {range === 'all' ? 'All time' : `Last ${RANGES.find(r=>r.key===range)?.label}`} · Live SQLite sync</span>
       </div>
     </div>
   );
@@ -324,6 +367,7 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [confHistory, setConfHistory] = useState([]);
   const [dbCameras,   setDbCameras]   = useState([]);
+  const [camsLoaded,  setCamsLoaded]  = useState(false);
   const [showPushBanner, setShowPushBanner] = useState(false);
   const [soundMode,      setSoundMode]      = useState('siren');
 
@@ -388,7 +432,7 @@ export default function App() {
   // ── AI Status Polling ──────────────────────────────────────────────────────
   useEffect(() => {
     if (!alarmsArmed) return;
-    const poll = setInterval(async () => {
+    const poll = setInterval(async () => { // 1 s — was 500 ms
       try {
         const data = await fetch(`${API_BASE}/status`).then(r => r.json());
         setSystemStatus(data.status || 'MONITORING');
@@ -399,9 +443,21 @@ export default function App() {
         if (violent && !isViolent)  { setIsViolent(true);  startSiren(); }
         if (!violent && isViolent)  { setIsViolent(false); stopSiren(); }
       } catch { setSystemStatus('CONN ERR'); }
-    }, 500);
+    }, 1000);
     return () => { clearInterval(poll); stopSiren(); };
   }, [alarmsArmed, isViolent, startSiren, stopSiren]);
+
+  // ── Camera DB Polling (always-on, powers the live matrix) ─────────────────
+  useEffect(() => {
+    const loadCams = () =>
+      fetch(`${API_BASE}/cameras`)
+        .then(r => r.json())
+        .then(data => { setDbCameras(data); setCamsLoaded(true); })
+        .catch(() => {});
+    loadCams();
+    const t = setInterval(loadCams, 5000);
+    return () => clearInterval(t);
+  }, []);
 
   // ── Incident Polling ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -564,7 +620,7 @@ export default function App() {
       {/* ── ANALYTICS TAB ── */}
       {activeTab === 'ANALYTICS' && (
         <div className="tab-pane">
-          <AnalyticsDashboard incidents={incidents} />
+          <AnalyticsDashboard incidents={incidents} cameras={dbCameras} />
         </div>
       )}
 
@@ -587,52 +643,80 @@ export default function App() {
         <div className="matrix-layout">
           <section className="col-cams">
             <div className="camera-matrix">
-              {CAMERA_NETWORK.map(cam => (
-                <div key={cam.id}
-                  className={`matrix-cell glass-panel
-                    ${focusedCam===cam.id ? 'cell-focused':''}
-                    ${cam.id===1&&isViolent ? 'cell-threat pulse-border':''}`}
-                  onClick={() => setFocusedCam(cam.id)}>
-                  <div className="cell-hdr">
-                    <div className="cell-hdr-left">
-                      <span className="cam-id">{cam.name}</span>
-                      <span className="cam-loc">{cam.location}</span>
-                    </div>
-                    {cam.id===1
-                      ? <span className={`ai-pill ${isViolent?'pill-red':'pill-green'}`}>
-                          {isViolent ? '⚠ VIOLENCE' : systemStatus}
-                        </span>
-                      : <span className="pill-mono pill-gray">{cam.status}</span>
-                    }
-                  </div>
-                  <div className="cell-video">
-                    {cam.type==='live' ? (
-                      <>
-                        <img src={cam.url} alt="AI Feed" className="matrix-feed" />
-                        <div className="conf-overlay">
-                          <ConfidenceArc value={confidence} threshold={threshold} size={70} />
-                        </div>
-                        <div className="xh xh-tl"/><div className="xh xh-tr"/>
-                        <div className="xh xh-bl"/><div className="xh xh-br"/>
-                        {isViolent && (
-                          <div className="threat-overlay">
-                            <span className="threat-label">⚠ VIOLENCE DETECTED</span>
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <div className="matrix-sim" style={{ background:cam.bg }}>
-                        {cam.type==='error' && <div className="static-noise"/>}
-                        <span className="sim-txt">{cam.status}</span>
-                      </div>
-                    )}
-                  </div>
-                  <div className="cell-ftr">
-                    <span className="cell-zone">{cam.zone}</span>
-                    {cam.id===1 && <span className="cell-thr">THR {threshold}%</span>}
-                  </div>
+              {!camsLoaded && (
+                <div style={{ gridColumn:'1/-1', display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:32, color:'var(--text-muted)', fontSize:'0.75rem', fontFamily:'var(--font-mono)' }}>
+                  <div style={{ width:16, height:16, border:'2px solid var(--border)', borderTopColor:'var(--accent)', borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
+                  Loading camera network…
                 </div>
-              ))}
+              )}
+              {camsLoaded && dbCameras.filter(c => c.is_active).map(cam => {
+                // AI cameras stream through backend inference endpoint
+                // HTTP cameras stream directly from their URL
+                const isAiFeed   = cam.id === 1;
+                const isHttpFeed = !cam.is_ai && cam.rtsp_url?.startsWith('http');
+                const isLive     = cam.is_ai || isHttpFeed;
+                const streamUrl  = cam.is_ai
+                  ? `${API_HOST}/api/video_feed/${cam.id}`
+                  : cam.rtsp_url;
+                const statusLabel = isAiFeed
+                  ? (isViolent ? '⚠ VIOLENCE' : systemStatus)
+                  : (cam.is_ai ? 'AI ACTIVE' : 'LIVE FEED');
+                return (
+                  <div key={cam.id}
+                    className={`matrix-cell glass-panel
+                      ${focusedCam===cam.id ? 'cell-focused':''}
+                      ${isAiFeed&&isViolent ? 'cell-threat pulse-border':''}`}
+                    onClick={() => setFocusedCam(cam.id)}>
+                    <div className="cell-hdr">
+                      <div className="cell-hdr-left">
+                        <span className="cam-id">{cam.name}</span>
+                        <span className="cam-loc">{cam.location}</span>
+                      </div>
+                      <span className={`ai-pill ${isAiFeed&&isViolent ? 'pill-red' : isLive ? 'pill-green' : 'pill-gray'}`}>
+                        {statusLabel}
+                      </span>
+                    </div>
+                    <div className="cell-video">
+                      {isLive ? (
+                        <>
+                          <img src={streamUrl} alt={`${cam.name} feed`} className="matrix-feed"
+                            onError={e => { e.target.style.display='none'; e.target.nextSibling?.style && (e.target.nextSibling.style.display='flex'); }}
+                          />
+                          <div className="matrix-sim" style={{ display:'none', background:'#0f172a' }}>
+                            <span className="sim-txt">STREAM OFFLINE</span>
+                          </div>
+                          {isAiFeed && (
+                            <div className="conf-overlay">
+                              <ConfidenceArc value={confidence} threshold={threshold} size={70} />
+                            </div>
+                          )}
+                          <div className="xh xh-tl"/><div className="xh xh-tr"/>
+                          <div className="xh xh-bl"/><div className="xh xh-br"/>
+                          {isAiFeed && isViolent && (
+                            <div className="threat-overlay">
+                              <span className="threat-label">⚠ VIOLENCE DETECTED</span>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="matrix-sim" style={{ background:'#1e293b' }}>
+                          <span className="sim-txt">RTSP / NO PREVIEW</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="cell-ftr">
+                      <span className="cell-zone">{cam.zone}</span>
+                      {isAiFeed && <span className="cell-thr">THR {threshold}%</span>}
+                      {cam.is_ai && !isAiFeed && <span className="cell-thr">AI ENABLED</span>}
+                    </div>
+                  </div>
+                );
+              })}
+              {camsLoaded && dbCameras.filter(c => c.is_active).length === 0 && (
+                <div style={{ gridColumn:'1/-1', textAlign:'center', padding:48, color:'var(--text-muted)', fontSize:'0.75rem', fontFamily:'var(--font-mono)' }}>
+                  No active cameras · Go to CAMERAS tab to add one
+                </div>
+              )}
             </div>
           </section>
 
@@ -679,7 +763,7 @@ export default function App() {
             </div>
 
             {/* City map */}
-            <CityZoneMap isViolent={isViolent} onCamSelect={setFocusedCam} focusedCam={focusedCam} />
+            <CityZoneMap isViolent={isViolent} onCamSelect={setFocusedCam} focusedCam={focusedCam} cameras={dbCameras} />
 
             {/* Triage — both roles */}
             <IncidentTriagePanel incidents={incidents} onAction={handleTriageAction} alarmsArmed={alarmsArmed} />

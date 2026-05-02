@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+.venv/
+
+# Database — never commit the live DB
+smart_city.db
+*.db
+*.db-shm
+*.db-wal
+
+# Evidence snapshots — can be large, regenerated at runtime
+snapshots/
+
+# AI model weights — too large for git, use Git LFS or share separately
+ai_engine/weights/*.pth
+ai_engine/weights/*.pt
+*.pth
+*.pt
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
