@@ -1,5 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
+import 'leaflet/dist/leaflet.css';
+import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from 'react-leaflet';
 import MetricsStrip      from './MetricsStrip';
 import ToastStack        from './ToastStack';
 import CameraConfigPanel from './CameraConfigPanel';
@@ -7,6 +9,7 @@ import UserManagement    from './UserManagement';
 import { useNotifications } from './useNotifications';
 import { useAuth }       from './AuthContext';
 import LoginScreen       from './LoginScreen';
+import { authFetch }     from './authFetch';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 import { API_BASE, API_HOST } from './config';
@@ -14,15 +17,6 @@ import { API_BASE, API_HOST } from './config';
 const PYTHON_STREAM = `${API_HOST}/api/video_feed`;
 
 // CAMERA_NETWORK removed — matrix now driven by dbCameras from the API
-
-const ZONE_LAYOUT = [
-  { id: "ZONE-A", label: "Central",   x: 42, y: 28, w: 28, h: 22 },
-  { id: "ZONE-B", label: "Transit",   x: 10, y: 52, w: 26, h: 22 },
-  { id: "ZONE-C", label: "Riverside", x: 64, y: 54, w: 26, h: 22 },
-  { id: "ZONE-D", label: "Financial", x: 38, y: 62, w: 24, h: 20 },
-];
-
-const CAM_PIN_POS = { 1:{x:56,y:39}, 2:{x:23,y:63}, 3:{x:77,y:65}, 4:{x:50,y:72} };
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 function fmtTime(ts) {
@@ -64,76 +58,254 @@ function MiniSparkline({ data = [] }) {
   );
 }
 
-// ─── CITY ZONE MAP ────────────────────────────────────────────────────────────
-function CityZoneMap({ isViolent, onCamSelect, focusedCam, cameras = [] }) {
-  const zoneStatus = (zoneId) => {
-    const cam = cameras.find(c => c.zone === zoneId);
-    if (!cam) return 'offline';
-    if (cam.id === 1 && isViolent) return 'threat';
-    if (cam.is_ai) return 'active';
-    if (!cam.is_active) return 'offline';
-    return 'standby';
-  };
-  const COLORS = { threat:'#dc2626', active:'#0284c7', standby:'#cbd5e1', offline:'#e2e8f0' };
-  const FILLS  = { threat:'rgba(220,38,38,0.1)', active:'rgba(2,132,199,0.08)', standby:'rgba(241,245,249,0.6)', offline:'rgba(248,250,252,0.6)' };
+// cameras with lat=0 lng=0 have no GPS set (backend default) — exclude from map
+const hasGps = c => c.latitude != null && c.longitude != null && !(c.latitude === 0 && c.longitude === 0);
+
+// ─── MAP AUTO-CENTER — re-centers map whenever camera list changes ────────────
+function MapAutoCenter({ cameras }) {
+  const map = useMap();
+  useEffect(() => {
+    const valid = cameras.filter(hasGps);
+    if (!valid.length) return;
+    const avgLat = valid.reduce((s, c) => s + c.latitude,  0) / valid.length;
+    const avgLng = valid.reduce((s, c) => s + c.longitude, 0) / valid.length;
+    map.setView([avgLat, avgLng], map.getZoom(), { animate: true });
+  }, [cameras, map]);
+  return null;
+}
+
+// ─── SHARED COLOR HELPER ──────────────────────────────────────────────────────
+function camStatusColor(cam, isViolent) {
+  if (isViolent && cam.is_ai) return '#dc2626';
+  if (!cam.is_active)         return '#64748b';
+  if (cam.is_ai)              return '#0284c7';
+  return '#22c55e';
+}
+
+// ─── CITY ZONE MAP (sidebar, compact) ────────────────────────────────────────
+function CityZoneMap({ isViolent, onCamSelect, focusedCam, cameras = [], onExpand }) {
+  const validCams    = cameras.filter(hasGps);
+  const defaultCenter = validCams.length
+    ? [validCams[0].latitude, validCams[0].longitude]
+    : [33.6844, 73.0479];
 
   return (
     <div className="glass-panel map-panel">
       <div className="panel-header">
         <span className="panel-title">CITY ZONE MAP</span>
-        <span className="pill-mono pill-cyan">LIVE TOPOLOGY</span>
+        <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+          <span className="pill-mono pill-cyan">GPS · LIVE</span>
+          <button className="map-expand-btn" onClick={onExpand} title="Open full map">⛶</button>
+        </div>
       </div>
-      <svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" className="city-svg">
-        {[20,40,60,80].map(v => (
-          <React.Fragment key={v}>
-            <line x1={v} y1="0" x2={v} y2="100" stroke="var(--border-light)" strokeWidth="0.3"/>
-            <line x1="0" y1={v} x2="100" y2={v}  stroke="var(--border-light)" strokeWidth="0.3"/>
-          </React.Fragment>
-        ))}
-        {ZONE_LAYOUT.map(z => {
-          const st = zoneStatus(z.id);
-          return (
-            <g key={z.id}>
-              <rect x={z.x} y={z.y} width={z.w} height={z.h} rx="1.5"
-                fill={FILLS[st]} stroke={COLORS[st]} strokeWidth="0.5" />
-              <text x={z.x+z.w/2} y={z.y+z.h/2-2.5} textAnchor="middle"
-                fill={COLORS[st]} fontSize="3.8" fontFamily="'DM Mono',monospace" fontWeight="500">{z.id}</text>
-              <text x={z.x+z.w/2} y={z.y+z.h/2+3.5} textAnchor="middle"
-                fill="var(--text-muted)" fontSize="2.6" fontFamily="'DM Mono',monospace">{z.label}</text>
-            </g>
-          );
-        })}
-        {cameras.map((cam, idx) => {
-          const p       = CAM_PIN_POS[cam.id] || { x: 15 + (idx % 5) * 18, y: 15 + Math.floor(idx / 5) * 20 };
-          const threat  = cam.id === 1 && isViolent;
-          const focused = focusedCam === cam.id;
-          const col     = threat ? '#dc2626' : cam.is_ai ? '#0284c7' : !cam.is_active ? '#cbd5e1' : '#94a3b8';
-          return (
-            <g key={cam.id} onClick={() => onCamSelect(cam.id)} style={{ cursor:'pointer' }}>
-              {focused && <circle cx={p.x} cy={p.y} r="4" fill="none" stroke={col} strokeWidth="0.4" opacity="0.5" />}
-              {threat && (
-                <circle cx={p.x} cy={p.y} r="3" fill="none" stroke="#dc2626" strokeWidth="0.4" opacity="0.5">
-                  <animate attributeName="r" values="3;5.5;3" dur="1.4s" repeatCount="indefinite" />
-                  <animate attributeName="opacity" values="0.5;0;0.5" dur="1.4s" repeatCount="indefinite" />
-                </circle>
-              )}
-              <circle cx={p.x} cy={p.y} r="1.8" fill={col} />
-              <text x={p.x+2.5} y={p.y+0.8} fill="var(--text-secondary)"
-                fontSize="2.3" fontFamily="'DM Mono',monospace">{cam.name}</text>
-            </g>
-          );
-        })}
-      </svg>
+      <div className="leaflet-wrapper">
+        <MapContainer center={defaultCenter} zoom={13}
+          style={{ height:'100%', width:'100%', background:'#0f172a' }}
+          zoomControl={false} scrollWheelZoom={false} attributionControl={false}>
+          <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />
+          <MapAutoCenter cameras={cameras} />
+          {cameras.map(cam => {
+            if (!hasGps(cam)) return null;
+            const col    = camStatusColor(cam, isViolent);
+            const focused = focusedCam === cam.id;
+            const threat  = isViolent && cam.is_ai;
+            return (
+              <CircleMarker key={cam.id}
+                center={[cam.latitude, cam.longitude]}
+                radius={focused ? 10 : threat ? 9 : 7}
+                pathOptions={{ color:col, fillColor:col, fillOpacity:0.8, weight: focused?2.5:1.5,
+                  dashArray: threat ? '4 2' : undefined }}
+                eventHandlers={{ click: () => onCamSelect(cam.id) }}>
+                <Tooltip direction="top" offset={[0,-8]} className="map-cam-tooltip">
+                  <strong>{cam.name}</strong><br />{cam.location}
+                </Tooltip>
+              </CircleMarker>
+            );
+          })}
+        </MapContainer>
+      </div>
+    </div>
+  );
+}
+
+// ─── FULL MAP OVERLAY ─────────────────────────────────────────────────────────
+function FullMapOverlay({ cameras, isViolent, onClose }) {
+  const validCams     = cameras.filter(hasGps);
+  const defaultCenter = validCams.length ? [validCams[0].latitude, validCams[0].longitude] : [33.6844, 73.0479];
+  const noGpsActive   = cameras.filter(c => c.is_active && !hasGps(c));
+
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fmap-overlay">
+      <div className="fmap-header">
+        <div className="fmap-title-block">
+          <span className="fmap-title">CITY SURVEILLANCE MAP</span>
+          <span className="fmap-subtitle">
+            {cameras.filter(c => c.is_active).length} active &nbsp;·&nbsp;
+            {validCams.length} on map &nbsp;·&nbsp;
+            {noGpsActive.length > 0 && <span className="fmap-warn">{noGpsActive.length} missing GPS</span>}
+          </span>
+        </div>
+        <div className="fmap-legend">
+          {[['#22c55e','Online'],['#0284c7','AI Active'],['#dc2626','Threat'],['#64748b','Offline']].map(([c,l]) => (
+            <span key={l} className="fmap-leg-item">
+              <span className="fmap-leg-dot" style={{ background:c }} />
+              {l}
+            </span>
+          ))}
+        </div>
+        <button className="fmap-close-btn" onClick={onClose}>✕ Close  <kbd>ESC</kbd></button>
+      </div>
+
+      <div className="fmap-body">
+        <MapContainer center={defaultCenter} zoom={13}
+          style={{ height:'100%', width:'100%', background:'#0f172a' }}
+          zoomControl={true} scrollWheelZoom={true} attributionControl={false}>
+          <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+            attribution='&copy; <a href="https://carto.com/">CARTO</a>' />
+          <MapAutoCenter cameras={cameras} />
+          {cameras.map(cam => {
+            if (!hasGps(cam)) return null;
+            const col    = camStatusColor(cam, isViolent);
+            const threat  = isViolent && cam.is_ai;
+            const status  = !cam.is_active ? 'OFFLINE' : threat ? '⚠ THREAT' : cam.is_ai ? 'AI ACTIVE' : 'STANDBY';
+            return (
+              <CircleMarker key={cam.id}
+                center={[cam.latitude, cam.longitude]}
+                radius={threat ? 13 : 10}
+                pathOptions={{ color:col, fillColor:col, fillOpacity:0.85, weight:2.5,
+                  dashArray: threat ? '5 3' : undefined }}>
+                <Tooltip permanent direction="top" offset={[0,-12]} className="map-cam-tooltip">
+                  <strong>{cam.name}</strong><br />
+                  {cam.location}<br />
+                  <span style={{ color:col }}>{status}</span>
+                </Tooltip>
+              </CircleMarker>
+            );
+          })}
+        </MapContainer>
+
+        {noGpsActive.length > 0 && (
+          <div className="fmap-no-gps-bar">
+            ⚠ {noGpsActive.map(c => c.name).join(', ')} — no GPS set. Go to CAMERAS tab → Edit to add coordinates.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── DISPATCH MODAL ───────────────────────────────────────────────────────────
+const UNITS = ['ALPHA-1','BRAVO-2','CHARLIE-3','DELTA-4','ECHO-5','FOXTROT-6','GAMMA-7','HAWK-8'];
+
+function DispatchModal({ incident, onConfirm, onClose }) {
+  const unitName = UNITS[incident.id % UNITS.length];
+  const etaBase  = 180 + (incident.id % 5) * 60;   // 3–7 mins, deterministic
+  const [etaSecs, setEtaSecs] = useState(etaBase);
+  const [phase,   setPhase]   = useState('dispatch'); // dispatch | en-route | done
+
+  useEffect(() => {
+    if (phase === 'done') return;
+    const t = setInterval(() => {
+      setEtaSecs(prev => {
+        if (prev <= 1) { clearInterval(t); setPhase('done'); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [phase]);
+
+  const fmtEta = s => `${String(Math.floor(s / 60)).padStart(2,'0')}:${String(s % 60).padStart(2,'0')}`;
+  const progress = Math.round(((etaBase - etaSecs) / etaBase) * 100);
+
+  return (
+    <div className="dispatch-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="dispatch-modal">
+
+        {/* Header */}
+        <div className="dm-header">
+          <div className="dm-siren">
+            <span className="dm-siren-light dm-siren-red" />
+            <span className="dm-siren-light dm-siren-blue" />
+          </div>
+          <div className="dm-title">POLICE DISPATCH ACTIVATED</div>
+          <button className="dm-close" onClick={onClose}>✕</button>
+        </div>
+
+        {/* Incident summary */}
+        <div className="dm-incident-row">
+          <div className="dm-tag">{incident.camera || 'CAM-01'}</div>
+          <div className="dm-incident-desc">{incident.description}</div>
+          <div className="dm-timestamp">{incident.timestamp}</div>
+        </div>
+
+        {/* Animated route track */}
+        <div className="dm-route-track">
+          <div className="dm-route-label dm-label-left">DISPATCH HQ</div>
+          <div className="dm-route-line">
+            <div className="dm-route-fill" style={{ width:`${progress}%` }} />
+            <div className="dm-unit-dot" style={{ left:`${progress}%` }}>
+              <span className="dm-unit-pulse" />
+            </div>
+          </div>
+          <div className="dm-route-label dm-label-right">INCIDENT SITE</div>
+        </div>
+
+        {/* Unit info */}
+        <div className="dm-info-grid">
+          <div className="dm-info-cell">
+            <div className="dm-info-label">UNIT ASSIGNED</div>
+            <div className="dm-info-value dm-unit-name">{unitName}</div>
+          </div>
+          <div className="dm-info-cell">
+            <div className="dm-info-label">STATUS</div>
+            <div className={`dm-info-value ${phase === 'done' ? 'dm-status-arrived' : 'dm-status-enroute'}`}>
+              {phase === 'done' ? '✓ ON SITE' : 'EN ROUTE'}
+            </div>
+          </div>
+          <div className="dm-info-cell">
+            <div className="dm-info-label">ETA</div>
+            <div className={`dm-info-value dm-eta ${phase === 'done' ? 'dm-status-arrived' : ''}`}>
+              {phase === 'done' ? '00:00' : fmtEta(etaSecs)}
+            </div>
+          </div>
+          <div className="dm-info-cell">
+            <div className="dm-info-label">INCIDENT REF</div>
+            <div className="dm-info-value">INC-{String(incident.id).padStart(4,'0')}</div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="dm-footer">
+          <button className="dm-btn-confirm" onClick={() => onConfirm(incident)}>
+            Confirm &amp; Log Dispatch
+          </button>
+          <button className="dm-btn-cancel" onClick={onClose}>Cancel</button>
+        </div>
+
+      </div>
     </div>
   );
 }
 
 // ─── INCIDENT TRIAGE ──────────────────────────────────────────────────────────
 function IncidentTriagePanel({ incidents, onAction, alarmsArmed }) {
-  const [filter, setFilter] = useState('ALL');
-  const counts = { UNREVIEWED:0, CONFIRMED:0, DISMISSED:0, ESCALATED:0 };
+  const [filter,          setFilter]          = useState('ALL');
+  const [dispatchTarget,  setDispatchTarget]   = useState(null);
+
+  const counts = { UNREVIEWED:0, CONFIRMED:0, DISMISSED:0, DISPATCHED:0, ESCALATED:0 };
   incidents.forEach(i => { const s = i.review_status || 'UNREVIEWED'; if (counts[s] !== undefined) counts[s]++; });
   const list = filter === 'ALL' ? incidents : incidents.filter(i => (i.review_status || 'UNREVIEWED') === filter);
+
+  const handleDispatchConfirm = (inc) => {
+    onAction(inc.id, 'DISPATCHED');
+    setDispatchTarget(null);
+  };
 
   return (
     <div className="glass-panel triage-panel">
@@ -142,7 +314,7 @@ function IncidentTriagePanel({ incidents, onAction, alarmsArmed }) {
         <span className="pill-mono pill-gray">{incidents.length} TOTAL</span>
       </div>
       <div className="filter-row">
-        {['ALL','UNREVIEWED','CONFIRMED','DISMISSED'].map(f => (
+        {['ALL','UNREVIEWED','CONFIRMED','DISPATCHED','DISMISSED'].map(f => (
           <button key={f} className={`filter-btn ${filter===f?'filter-active':''}`} onClick={() => setFilter(f)}>
             {f}{f!=='ALL'&&counts[f]?<span className="f-count">{counts[f]}</span>:null}
           </button>
@@ -167,15 +339,33 @@ function IncidentTriagePanel({ incidents, onAction, alarmsArmed }) {
                   <span className="tc-conf-label">{inc.confidence}%</span>
                 </div>
               )}
-              {inc.snapshot_path && (
-                <div style={{ marginTop:6 }}>
-                  <img
-                    src={`${API_HOST}${inc.snapshot_path}`}
-                    alt="Evidence snapshot"
-                    style={{ width:'100%', maxHeight:120, objectFit:'cover', borderRadius:4, border:'1px solid var(--border)' }}
-                    onError={e => e.target.style.display='none'}
-                  />
-                  <div style={{ fontSize:'0.55rem', color:'var(--text-muted)', fontFamily:'var(--font-mono)', marginTop:2 }}>📷 EVIDENCE FRAME</div>
+              {/* ── Evidence: video (primary) + snapshot (fallback) ── */}
+              {(inc.video_path || inc.snapshot_path) && (
+                <div className="tc-evidence">
+                  {inc.video_path && (
+                    <div className="tc-video-wrap">
+                      <video
+                        src={`${API_HOST}${inc.video_path}`}
+                        controls
+                        muted
+                        preload="metadata"
+                        className="tc-video"
+                        onError={e => e.target.parentElement.style.display='none'}
+                      />
+                      <div className="tc-evidence-label">▶ EVIDENCE VIDEO · {inc.camera || 'CAM-01'}</div>
+                    </div>
+                  )}
+                  {inc.snapshot_path && (
+                    <div className={inc.video_path ? 'tc-snap-thumb' : 'tc-snap-full'}>
+                      <img
+                        src={`${API_HOST}${inc.snapshot_path}`}
+                        alt="Evidence snapshot"
+                        className="tc-snap-img"
+                        onError={e => e.target.style.display='none'}
+                      />
+                      <div className="tc-evidence-label">📷 EVIDENCE FRAME</div>
+                    </div>
+                  )}
                 </div>
               )}
               {st === 'UNREVIEWED' && (
@@ -185,6 +375,20 @@ function IncidentTriagePanel({ incidents, onAction, alarmsArmed }) {
                   <button className="tc-btn btn-escalate" onClick={() => onAction(inc.id,'ESCALATED')}>↑ Escalate</button>
                 </div>
               )}
+              {st === 'CONFIRMED' && (
+                <div className="tc-actions">
+                  <button className="tc-btn btn-dispatch" onClick={() => setDispatchTarget(inc)}>
+                    🚔 Dispatch Police
+                  </button>
+                </div>
+              )}
+              {st === 'DISPATCHED' && (
+                <div className="tc-dispatched-row">
+                  <span className="tc-dispatched-unit">
+                    ▶ {UNITS[inc.id % UNITS.length]} dispatched
+                  </span>
+                </div>
+              )}
               {st !== 'UNREVIEWED' && inc.reviewed_by && (
                 <div className="tc-reviewed">Actioned by {inc.reviewed_by}</div>
               )}
@@ -192,6 +396,14 @@ function IncidentTriagePanel({ incidents, onAction, alarmsArmed }) {
           );
         })}
       </div>
+
+      {dispatchTarget && (
+        <DispatchModal
+          incident={dispatchTarget}
+          onConfirm={handleDispatchConfirm}
+          onClose={() => setDispatchTarget(null)}
+        />
+      )}
     </div>
   );
 }
@@ -354,6 +566,100 @@ function AnalyticsDashboard({ incidents, cameras = [] }) {
   );
 }
 
+// ─── AUDIT LOGS PANEL ─────────────────────────────────────────────────────────
+const ACTION_META = {
+  CAMERA_ADDED:          { color: '#0284c7', icon: '⬡', label: 'Camera Added'    },
+  CAMERA_UPDATED:        { color: '#0ea5e9', icon: '⬡', label: 'Camera Updated'  },
+  CAMERA_DELETED:        { color: '#64748b', icon: '⬡', label: 'Camera Removed'  },
+  USER_CREATED:          { color: '#a855f7', icon: '⊕', label: 'User Created'    },
+  USER_DELETED:          { color: '#6b7280', icon: '⊕', label: 'User Deleted'    },
+  INCIDENT_CONFIRMED:    { color: '#22c55e', icon: '✓', label: 'Confirmed'       },
+  INCIDENT_DISMISSED:    { color: '#f59e0b', icon: '✕', label: 'Dismissed'       },
+  INCIDENT_ESCALATED:    { color: '#a855f7', icon: '↑', label: 'Escalated'       },
+  INCIDENT_DISPATCHED:   { color: '#3b82f6', icon: '🚔', label: 'Dispatched'    },
+};
+
+function AuditLogsPanel() {
+  const [logs,        setLogs]        = useState([]);
+  const [loading,     setLoading]     = useState(true);
+  const [filter,      setFilter]      = useState('ALL');
+  const [lastRefresh, setLastRefresh] = useState(null);
+
+  const fetchLogs = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await authFetch(`${API_BASE}/audit-logs`).then(r => r.json());
+      setLogs(Array.isArray(data) ? data : []);
+      setLastRefresh(new Date());
+    } catch {
+      setLogs([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchLogs(); }, [fetchLogs]);
+
+  const categories = ['ALL', 'INCIDENT', 'CAMERA', 'USER'];
+  const filtered = filter === 'ALL'
+    ? logs
+    : logs.filter(l => l.action_type.startsWith(filter));
+
+  const fmtTs = ts => {
+    try { return new Date(ts).toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', second:'2-digit' }); }
+    catch { return ts; }
+  };
+
+  return (
+    <div className="al-root">
+      <div className="al-header">
+        <div>
+          <h2 className="al-title">System Audit Log</h2>
+          <p className="al-sub">
+            {logs.length} entries
+            {lastRefresh && ` · refreshed ${lastRefresh.toLocaleTimeString('en-GB')}`}
+          </p>
+        </div>
+        <button className="al-refresh-btn" onClick={fetchLogs} disabled={loading}>
+          {loading ? '…' : '↻ Refresh'}
+        </button>
+      </div>
+
+      <div className="al-filter-row">
+        {categories.map(c => (
+          <button key={c} className={`al-filter-btn ${filter===c ? 'al-filter-active':''}`}
+            onClick={() => setFilter(c)}>{c}</button>
+        ))}
+      </div>
+
+      <div className="al-list">
+        {loading && <div className="al-empty"><div className="al-spinner" /><span>Loading logs…</span></div>}
+        {!loading && filtered.length === 0 && (
+          <div className="al-empty"><p>No audit entries in this category.</p></div>
+        )}
+        {!loading && filtered.map(log => {
+          const meta = ACTION_META[log.action_type] || { color:'#94a3b8', icon:'·', label: log.action_type };
+          return (
+            <div key={log.log_id} className="al-row">
+              <div className="al-icon" style={{ color: meta.color }}>{meta.icon}</div>
+              <div className="al-body">
+                <div className="al-action-row">
+                  <span className="al-action-pill" style={{ color: meta.color, borderColor: meta.color + '44', background: meta.color + '18' }}>
+                    {meta.label}
+                  </span>
+                  <span className="al-actor">{log.user_email || 'system'}</span>
+                </div>
+                <div className="al-desc">{log.event_description}</div>
+              </div>
+              <div className="al-ts">{fmtTs(log.timestamp)}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── ROOT APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [isViolent,   setIsViolent]   = useState(false);
@@ -370,6 +676,7 @@ export default function App() {
   const [camsLoaded,  setCamsLoaded]  = useState(false);
   const [showPushBanner, setShowPushBanner] = useState(false);
   const [soundMode,      setSoundMode]      = useState('siren');
+  const [showFullMap,    setShowFullMap]    = useState(false);
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   const { user, isAdmin, isOperator, fullName, role, logout, isAuthenticated, loading: authLoading } = useAuth();
@@ -434,7 +741,7 @@ export default function App() {
     if (!alarmsArmed) return;
     const poll = setInterval(async () => { // 1 s — was 500 ms
       try {
-        const data = await fetch(`${API_BASE}/status`).then(r => r.json());
+        const data = await authFetch(`${API_BASE}/status`).then(r => r.json());
         setSystemStatus(data.status || 'MONITORING');
         const conf = Math.round((data.confidence || 0) * 100);
         setConfidence(conf);
@@ -450,10 +757,10 @@ export default function App() {
   // ── Camera DB Polling (always-on, powers the live matrix) ─────────────────
   useEffect(() => {
     const loadCams = () =>
-      fetch(`${API_BASE}/cameras`)
-        .then(r => r.json())
-        .then(data => { setDbCameras(data); setCamsLoaded(true); })
-        .catch(() => {});
+      authFetch(`${API_BASE}/cameras`)
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(data => { setDbCameras(Array.isArray(data) ? data : []); setCamsLoaded(true); })
+        .catch(() => { setCamsLoaded(true); });
     loadCams();
     const t = setInterval(loadCams, 5000);
     return () => clearInterval(t);
@@ -462,7 +769,7 @@ export default function App() {
   // ── Incident Polling ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!alarmsArmed) return;
-    const load = () => fetch(`${API_BASE}/incidents`).then(r => r.json()).then(setIncidents).catch(() => {});
+    const load = () => authFetch(`${API_BASE}/incidents`).then(r => r.json()).then(setIncidents).catch(() => {});
     load();
     const t = setInterval(load, 2000);
     return () => clearInterval(t);
@@ -472,7 +779,7 @@ export default function App() {
   useEffect(() => {
     if (!alarmsArmed || !isAdmin) return;
     const t = setTimeout(() => {
-      fetch(`${API_BASE}/config/threshold`, {
+      authFetch(`${API_BASE}/config/threshold`, {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ threshold: threshold/100 }),
       }).catch(() => {});
@@ -484,7 +791,7 @@ export default function App() {
   const handleTriageAction = useCallback(async (id, status) => {
     const payload = { status, reviewed_by: fullName || 'Operator', reviewed_at: new Date().toISOString() };
     setIncidents(prev => prev.map(i => i.id===id ? {...i, review_status:status, ...payload} : i));
-    fetch(`${API_BASE}/incidents/${id}/status`, {
+    authFetch(`${API_BASE}/incidents/${id}/status`, {
       method:'PATCH', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(payload),
     }).catch(() => {});
@@ -508,7 +815,7 @@ export default function App() {
 
   // Admin sees 4 tabs, Operator sees 2
   const tabs = isAdmin
-    ? ['MATRIX', 'ANALYTICS', 'CAMERAS', 'USERS']
+    ? ['MATRIX', 'ANALYTICS', 'CAMERAS', 'USERS', 'LOGS']
     : ['MATRIX', 'ANALYTICS'];
 
   const tabLabels = {
@@ -516,6 +823,7 @@ export default function App() {
     ANALYTICS: '◈ ANALYTICS',
     CAMERAS:   '⬡ CAMERAS',
     USERS:     '⊕ USERS',
+    LOGS:      '≡ AUDIT LOGS',
   };
 
   return (
@@ -635,6 +943,13 @@ export default function App() {
       {activeTab === 'USERS' && isAdmin && (
         <div className="tab-pane">
           <UserManagement currentUserEmail={user?.email} />
+        </div>
+      )}
+
+      {/* ── LOGS TAB — admin only ── */}
+      {activeTab === 'LOGS' && isAdmin && (
+        <div className="tab-pane">
+          <AuditLogsPanel />
         </div>
       )}
 
@@ -763,12 +1078,17 @@ export default function App() {
             </div>
 
             {/* City map */}
-            <CityZoneMap isViolent={isViolent} onCamSelect={setFocusedCam} focusedCam={focusedCam} cameras={dbCameras} />
+            <CityZoneMap isViolent={isViolent} onCamSelect={setFocusedCam} focusedCam={focusedCam}
+              cameras={dbCameras} onExpand={() => setShowFullMap(true)} />
 
             {/* Triage — both roles */}
             <IncidentTriagePanel incidents={incidents} onAction={handleTriageAction} alarmsArmed={alarmsArmed} />
           </aside>
         </div>
+      )}
+
+      {showFullMap && (
+        <FullMapOverlay cameras={dbCameras} isViolent={isViolent} onClose={() => setShowFullMap(false)} />
       )}
 
       <ToastStack

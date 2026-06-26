@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './CameraConfigPanel.css';
-
+import 'leaflet/dist/leaflet.css';
+import { authFetch } from './authFetch';
+import { MapContainer, TileLayer, CircleMarker, useMapEvents } from 'react-leaflet';
 import { API_BASE } from './config';
-const ZONES    = ['ZONE-A', 'ZONE-B', 'ZONE-C', 'ZONE-D', 'ZONE-E', 'ZONE-F'];
-const EMPTY    = { name:'', location:'', zone:'ZONE-A', rtsp_url:'', is_active:true, is_ai:false };
+const EMPTY = { name:'', location:'', zone:'ZONE-A', rtsp_url:'', is_active:true, is_ai:false, latitude:0, longitude:0 };
 
 // ── Connection test result ─────────────────────────────────────────────────────
 function ConnResult({ result }) {
@@ -30,11 +31,88 @@ function Toggle({ checked, onChange, accent }) {
   );
 }
 
+// ── Map click handler (must be a child of MapContainer) ──────────────────────
+function PickerEvents({ onPick }) {
+  useMapEvents({ click: e => onPick(e.latlng.lat, e.latlng.lng) });
+  return null;
+}
+
+// ── Full-screen map picker modal ───────────────────────────────────────────────
+function MapPickerModal({ initialLat, initialLng, onConfirm, onClose }) {
+  const defaultLat = (initialLat && initialLat !== 0) ? initialLat : 33.6844;
+  const defaultLng = (initialLng && initialLng !== 0) ? initialLng : 73.0479;
+  const [pin, setPin] = useState({ lat: defaultLat, lng: defaultLng });
+  const [pinSet, setPinSet] = useState(!!(initialLat && initialLat !== 0));
+
+  const handlePick = (lat, lng) => { setPin({ lat, lng }); setPinSet(true); };
+
+  return (
+    <div className="cp-map-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="cp-map-modal">
+        <div className="cp-map-header">
+          <div>
+            <span className="cp-map-title">Pick Camera Location</span>
+            <span className="cp-map-hint">Click anywhere on the map to place the pin</span>
+          </div>
+          <button className="cp-close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="cp-map-body">
+          <MapContainer center={[defaultLat, defaultLng]} zoom={13} style={{ height: '100%', width: '100%' }}>
+            <TileLayer
+              url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+              attribution='&copy; <a href="https://carto.com/">CARTO</a>'
+            />
+            <PickerEvents onPick={handlePick} />
+            {pinSet && (
+              <CircleMarker center={[pin.lat, pin.lng]} radius={10}
+                pathOptions={{ color: '#4f6ef7', fillColor: '#4f6ef7', fillOpacity: 1, weight: 3 }}>
+              </CircleMarker>
+            )}
+          </MapContainer>
+        </div>
+
+        <div className="cp-map-footer">
+          <span className="cp-map-coords">
+            {pinSet
+              ? <>📍 <strong>{pin.lat.toFixed(6)}</strong>, <strong>{pin.lng.toFixed(6)}</strong></>
+              : <span className="cp-map-no-pin">No pin placed yet — click on the map</span>
+            }
+          </span>
+          <div className="cp-map-actions">
+            <button className="cp-btn-cancel" onClick={onClose}>Cancel</button>
+            <button className="cp-btn-save" disabled={!pinSet}
+              onClick={() => onConfirm(pin.lat, pin.lng)}>
+              Confirm Location
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Camera form modal ──────────────────────────────────────────────────────────
 function CameraForm({ initial, onSave, onCancel, isSaving }) {
   const [form,       setForm]       = useState(initial || EMPTY);
   const [connResult, setConnResult] = useState(null);
   const [errors,     setErrors]     = useState({});
+  const [gpsState,   setGpsState]   = useState('idle'); // idle | fetching | ok | error
+  const [showPicker, setShowPicker] = useState(false);
+
+  const useMyLocation = () => {
+    if (!navigator.geolocation) { setGpsState('error'); return; }
+    setGpsState('fetching');
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        set('latitude',  parseFloat(pos.coords.latitude.toFixed(6)));
+        set('longitude', parseFloat(pos.coords.longitude.toFixed(6)));
+        setGpsState('ok');
+      },
+      () => setGpsState('error'),
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  };
 
   const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setErrors(e => ({ ...e, [k]: undefined })); };
 
@@ -53,7 +131,7 @@ function CameraForm({ initial, onSave, onCancel, isSaving }) {
     if (!form.rtsp_url.trim()) { setErrors(e => ({ ...e, rtsp_url:'Enter a URL first' })); return; }
     setConnResult({ loading: true });
     try {
-      const res = await fetch(`${API_BASE}/cameras/test-rtsp`, {
+      const res = await authFetch(`${API_BASE}/cameras/test-rtsp`, {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ url: form.rtsp_url }),
       });
@@ -64,6 +142,7 @@ function CameraForm({ initial, onSave, onCancel, isSaving }) {
   };
 
   return (
+    <>
     <div className="cp-overlay" onClick={e => e.target === e.currentTarget && onCancel()}>
       <div className="cp-modal">
         <div className="cp-modal-header">
@@ -72,21 +151,13 @@ function CameraForm({ initial, onSave, onCancel, isSaving }) {
         </div>
 
         <div className="cp-modal-body">
-          {/* Name + Zone */}
-          <div className="cp-row-2">
-            <div className="cp-field">
-              <label className="cp-label">Camera name <span className="cp-req">*</span></label>
-              <input className={`cp-input ${errors.name ? 'cp-input-err':''}`}
-                placeholder="e.g. CAM-05" value={form.name}
-                onChange={e => set('name', e.target.value)} />
-              {errors.name && <span className="cp-err">{errors.name}</span>}
-            </div>
-            <div className="cp-field">
-              <label className="cp-label">Zone</label>
-              <select className="cp-select" value={form.zone} onChange={e => set('zone', e.target.value)}>
-                {ZONES.map(z => <option key={z} value={z}>{z}</option>)}
-              </select>
-            </div>
+          {/* Name */}
+          <div className="cp-field">
+            <label className="cp-label">Camera name <span className="cp-req">*</span></label>
+            <input className={`cp-input ${errors.name ? 'cp-input-err':''}`}
+              placeholder="e.g. CAM-05" value={form.name}
+              onChange={e => set('name', e.target.value)} />
+            {errors.name && <span className="cp-err">{errors.name}</span>}
           </div>
 
           {/* Location */}
@@ -96,6 +167,43 @@ function CameraForm({ initial, onSave, onCancel, isSaving }) {
               placeholder="e.g. North Gate / Parking Level 2" value={form.location}
               onChange={e => set('location', e.target.value)} />
             {errors.location && <span className="cp-err">{errors.location}</span>}
+          </div>
+
+          {/* GPS Coordinates */}
+          <div className="cp-field">
+            <div className="cp-gps-header">
+              <label className="cp-label">GPS Coordinates <span className="cp-label-opt">(optional — shows on map)</span></label>
+              <div className="cp-gps-btns">
+                <button type="button" className="cp-gps-btn" onClick={() => setShowPicker(true)}>
+                  🗺 View Map
+                </button>
+                <button type="button" className={`cp-gps-btn ${gpsState === 'fetching' ? 'gps-fetching' : ''}`}
+                  onClick={useMyLocation} disabled={gpsState === 'fetching'}>
+                  {gpsState === 'fetching' ? '…' : '⊕ My Location'}
+                </button>
+              </div>
+            </div>
+            <div className="cp-row-2">
+              <input className="cp-input" type="number" step="0.000001"
+                placeholder="Latitude (e.g. 33.6844)"
+                value={form.latitude || ''}
+                onChange={e => { set('latitude', parseFloat(e.target.value) || 0); setGpsState('idle'); }} />
+              <input className="cp-input" type="number" step="0.000001"
+                placeholder="Longitude (e.g. 73.0479)"
+                value={form.longitude || ''}
+                onChange={e => { set('longitude', parseFloat(e.target.value) || 0); setGpsState('idle'); }} />
+            </div>
+            {(gpsState === 'ok' || (form.latitude !== 0 && form.longitude !== 0)) && (
+              <div className="cp-gps-feedback">
+                <span className="cp-gps-ok">📍 {Number(form.latitude).toFixed(6)}, {Number(form.longitude).toFixed(6)}</span>
+                <a className="cp-gps-verify"
+                  href={`https://www.google.com/maps?q=${form.latitude},${form.longitude}`}
+                  target="_blank" rel="noreferrer">Verify on Google Maps ↗</a>
+              </div>
+            )}
+            {gpsState === 'error' && (
+              <span className="cp-err">Could not get location — allow browser location access and retry.</span>
+            )}
           </div>
 
           {/* URL + test */}
@@ -140,6 +248,21 @@ function CameraForm({ initial, onSave, onCancel, isSaving }) {
         </div>
       </div>
     </div>
+
+    {showPicker && (
+      <MapPickerModal
+        initialLat={form.latitude}
+        initialLng={form.longitude}
+        onConfirm={(lat, lng) => {
+          set('latitude', parseFloat(lat.toFixed(6)));
+          set('longitude', parseFloat(lng.toFixed(6)));
+          setGpsState('ok');
+          setShowPicker(false);
+        }}
+        onClose={() => setShowPicker(false)}
+      />
+    )}
+    </>
   );
 }
 
@@ -206,6 +329,7 @@ export default function CameraConfigPanel({ onCamerasChange }) {
   const [editTarget, setEditTarget] = useState(null);
   const [isSaving,   setIsSaving]   = useState(false);
   const [toast,      setToast]      = useState(null);
+  const [resetPhase, setResetPhase] = useState('idle'); // idle | confirm | clearing
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -214,9 +338,10 @@ export default function CameraConfigPanel({ onCamerasChange }) {
 
   const loadCameras = useCallback(async () => {
     try {
-      const data = await fetch(`${API_BASE}/cameras`).then(r => r.json());
-      setCameras(data);
-      onCamerasChange?.(data);
+      const res  = await authFetch(`${API_BASE}/cameras`);
+      const data = res.ok ? await res.json() : [];
+      setCameras(Array.isArray(data) ? data : []);
+      onCamerasChange?.(Array.isArray(data) ? data : []);
     } catch {
       showToast('Could not reach camera API', 'error');
     } finally {
@@ -232,7 +357,7 @@ export default function CameraConfigPanel({ onCamerasChange }) {
       const isEdit = !!editTarget?.id;
       const url    = isEdit ? `${API_BASE}/cameras/${editTarget.id}` : `${API_BASE}/cameras`;
       const method = isEdit ? 'PATCH' : 'POST';
-      await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(form) });
+      await authFetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(form) });
       await loadCameras();
       setShowForm(false); setEditTarget(null);
       showToast(isEdit ? 'Camera updated' : 'Camera registered');
@@ -242,7 +367,7 @@ export default function CameraConfigPanel({ onCamerasChange }) {
 
   const handleToggle = async (cam) => {
     try {
-      await fetch(`${API_BASE}/cameras/${cam.id}`, {
+      await authFetch(`${API_BASE}/cameras/${cam.id}`, {
         method:'PATCH', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ is_active: !cam.is_active }),
       });
@@ -253,10 +378,24 @@ export default function CameraConfigPanel({ onCamerasChange }) {
 
   const handleDelete = async (id) => {
     try {
-      await fetch(`${API_BASE}/cameras/${id}`, { method:'DELETE' });
+      await authFetch(`${API_BASE}/cameras/${id}`, { method:'DELETE' });
       await loadCameras();
       showToast('Camera decommissioned');
     } catch { showToast('Delete failed', 'error'); }
+  };
+
+  const handleReset = async () => {
+    setResetPhase('clearing');
+    try {
+      const res = await authFetch(`${API_BASE}/admin/reset-database`, { method: 'DELETE' });
+      if (res.ok) {
+        await loadCameras();
+        showToast('Database cleared — all cameras, incidents and logs removed');
+      } else {
+        showToast('Reset failed', 'error');
+      }
+    } catch { showToast('Reset failed', 'error'); }
+    finally { setResetPhase('idle'); }
   };
 
   const active  = cameras.filter(c => c.is_active);
@@ -335,6 +474,29 @@ export default function CameraConfigPanel({ onCamerasChange }) {
           isSaving={isSaving}
         />
       )}
+
+      {/* Danger zone */}
+      <div className="cp-danger-zone">
+        <div className="cp-danger-info">
+          <span className="cp-danger-title">Danger Zone</span>
+          <span className="cp-danger-sub">Permanently deletes all cameras, incidents and audit logs from the database.</span>
+        </div>
+        {resetPhase === 'idle' && (
+          <button className="cp-danger-btn" onClick={() => setResetPhase('confirm')}>
+            Clear Database
+          </button>
+        )}
+        {resetPhase === 'confirm' && (
+          <div className="cp-danger-confirm">
+            <span>This cannot be undone. Proceed?</span>
+            <button className="cp-danger-yes" onClick={handleReset}>Yes, wipe it</button>
+            <button className="cp-danger-no"  onClick={() => setResetPhase('idle')}>Cancel</button>
+          </div>
+        )}
+        {resetPhase === 'clearing' && (
+          <span className="cp-danger-working">Clearing…</span>
+        )}
+      </div>
 
       {toast && (
         <div className={`cp-toast toast-${toast.type}`}>

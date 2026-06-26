@@ -23,8 +23,12 @@ export function AuthProvider({ children }) {
       if (fbUser) {
         setUser(fbUser);
         try {
-          // Attempt to retrieve user roles from backend API for robust server-side security bypass
-          const res = await fetch(`${API_BASE}/users`);
+          // Use fbUser.getIdToken() directly — auth.currentUser may still be null
+          // during the initial session-restore fire of onAuthStateChanged.
+          const token = await fbUser.getIdToken();
+          const res = await fetch(`${API_BASE}/users`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
           if (res.ok) {
             const users = await res.json();
             const dbUser = users.find(u => u.email.toLowerCase() === fbUser.email.toLowerCase());

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './MetricsStrip.css';
+import { authFetch } from './authFetch';
 
 import { API_BASE } from './config';
 
@@ -84,7 +85,7 @@ export default function MetricsStrip({ alarmsArmed }) {
 
     const poll = async () => {
       try {
-        const data = await fetch(`${API_BASE}/metrics`).then(r => r.json());
+        const data = await authFetch(`${API_BASE}/metrics`).then(r => r.json());
         setMetrics(data);
         setConnErr(false);
         setLatHistory(h => [...h.slice(-29), data.avg_latency_ms]);

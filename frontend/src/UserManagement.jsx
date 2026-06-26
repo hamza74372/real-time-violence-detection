@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './UserManagement.css';
+import { authFetch } from './authFetch';
 
 import { API_BASE } from './config';
 
@@ -223,7 +224,7 @@ export default function UserManagement({ currentUserEmail }) {
 
   const loadUsers = useCallback(async () => {
     try {
-      const data = await fetch(`${API_BASE}/users`).then(r => r.json());
+      const data = await authFetch(`${API_BASE}/users`).then(r => r.json());
       setUsers(data);
     } catch {
       showToast('Could not load users', 'error');
@@ -237,7 +238,7 @@ export default function UserManagement({ currentUserEmail }) {
   const handleCreate = async (form) => {
     setIsSaving(true);
     try {
-      const res  = await fetch(`${API_BASE}/users`, {
+      const res  = await authFetch(`${API_BASE}/users`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify(form),
@@ -259,7 +260,7 @@ export default function UserManagement({ currentUserEmail }) {
 
   const handleDelete = async (email) => {
     try {
-      const res = await fetch(`${API_BASE}/users/${encodeURIComponent(email)}`, { method: 'DELETE' });
+      const res = await authFetch(`${API_BASE}/users/${encodeURIComponent(email)}`, { method: 'DELETE' });
       if (!res.ok) {
         const data = await res.json();
         showToast(data.detail || 'Delete failed', 'error');
