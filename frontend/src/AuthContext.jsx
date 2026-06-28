@@ -26,9 +26,13 @@ export function AuthProvider({ children }) {
           // Use fbUser.getIdToken() directly — auth.currentUser may still be null
           // during the initial session-restore fire of onAuthStateChanged.
           const token = await fbUser.getIdToken();
+          // 6-second timeout so a slow/starting backend never blocks the UI
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 6000);
           const res = await fetch(`${API_BASE}/users`, {
             headers: { Authorization: `Bearer ${token}` },
-          });
+            signal: ctrl.signal,
+          }).finally(() => clearTimeout(timer));
           if (res.ok) {
             const users = await res.json();
             const dbUser = users.find(u => u.email.toLowerCase() === fbUser.email.toLowerCase());
@@ -77,13 +81,15 @@ export function AuthProvider({ children }) {
             setRole('operator');
             setProfile({ full_name: fbUser.email, role: 'operator' });
           }
+        } finally {
+          setLoading(false);
         }
       } else {
         setUser(null);
         setRole(null);
         setProfile(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
     return () => unsub();
   }, []);

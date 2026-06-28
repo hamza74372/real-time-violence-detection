@@ -10,8 +10,11 @@ import sqlite3
 import time
 import os
 import threading
+import numpy as np
+import requests
 from collections import deque
 from datetime import datetime
+from urllib.parse import urlparse
 
 from config import (
     DB_PATH, SNAPSHOTS_DIR, VIDEOS_DIR, CONFIDENCE_THRESHOLD, VOTES_NEEDED,
@@ -50,9 +53,63 @@ def _save_evidence_video(frames: list, filepath: str, fps: int, size: tuple):
         print(f"  ✗ Evidence video failed: {e}")
 
 
+def _make_error_frame(message: str):
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.putText(frame, "STREAM ERROR", (160, 210), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 200), 2)
+    cv2.putText(frame, message[:70],   (30,  270), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1)
+    return frame
+
+
+def _iter_http_snapshot(base_url: str):
+    """
+    Low-latency frame source for IP Webcam and similar apps.
+    Polls /shot.jpg instead of streaming /video — always fetches the CURRENT
+    frame so there is no buffer buildup regardless of inference speed.
+    Automatically reconnects on failure.
+    """
+    parsed = urlparse(base_url)
+    base      = f"{parsed.scheme}://{parsed.netloc}"
+    shot_url  = base + '/shot.jpg'
+    fail_count = 0
+
+    print(f"[HTTP-SNAP] Starting snapshot poll → {shot_url}")
+    while True:
+        try:
+            resp  = requests.get(shot_url, timeout=(3, 3))
+            resp.raise_for_status()
+            arr   = np.frombuffer(resp.content, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if frame is not None:
+                fail_count = 0
+                yield frame
+                continue
+        except Exception as e:
+            fail_count += 1
+            if fail_count == 1:
+                print(f"[HTTP-SNAP] Error: {e}")
+            delay = min(fail_count * 0.5, 5)
+            time.sleep(delay)
+
+
+def _cap_iter(cap):
+    """Yield frames from an open cv2.VideoCapture until it fails or closes."""
+    failures = 0
+    while cap.isOpened():
+        ok, frame = cap.read()
+        if not ok:
+            failures += 1
+            if failures >= 30:
+                break
+            time.sleep(0.05)
+            continue
+        failures = 0
+        yield frame
+    cap.release()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # AI VIDEO GENERATOR — works for any camera source
-# source: 0 = laptop webcam, or an http:// URL string for IP cameras
+# source: 0 = laptop webcam, http:// for IP cameras, rtsp:// for RTSP cameras
 # ─────────────────────────────────────────────────────────────────────────────
 def generate_frames_for_camera(cam_id: int, source):
     global global_system_status, global_confidence, camera_states
@@ -60,11 +117,25 @@ def generate_frames_for_camera(cam_id: int, source):
     camera_states[cam_id] = {"status": "Waiting for time buffer...", "confidence": 0.0}
     cam_label = f"CAM-{cam_id:02d}"
 
-    cap             = cv2.VideoCapture(source)
+    is_http = isinstance(source, str) and source.startswith("http")
+
+    if is_http:
+        frame_iter = _iter_http_snapshot(source)
+    else:
+        cap = cv2.VideoCapture(source)
+        if not cap.isOpened():
+            camera_states[cam_id] = {"status": "ERROR: Cannot open stream", "confidence": 0.0}
+            print(f"[{cam_label}] ERROR: cv2.VideoCapture failed to open source: {source}")
+            err_frame = _make_error_frame(f"Cannot open: {source}")
+            ret, buf = cv2.imencode('.jpg', err_frame)
+            if ret:
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            return
+        frame_iter = iter(_cap_iter(cap))
+
     sequence_buffer = deque(maxlen=SEQUENCE_LEN)
     box_color       = (0, 255, 0)
 
-    # Rolling evidence buffer — stores raw (unannotated) frames for video clips
     video_buffer_len = VIDEO_BUFFER_SECONDS * VIDEO_FPS
     raw_frame_buffer = deque(maxlen=video_buffer_len)
 
@@ -73,10 +144,7 @@ def generate_frames_for_camera(cam_id: int, source):
     violence_votes = 0
     smoothed_conf  = 0.0
 
-    while cap.isOpened():
-        success, frame = cap.read()
-        if not success:
-            break
+    for frame in frame_iter:
 
         frame_count    += 1
         # Store raw frame for evidence video BEFORE any annotation

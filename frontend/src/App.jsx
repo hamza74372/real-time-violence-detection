@@ -76,10 +76,10 @@ function MapAutoCenter({ cameras }) {
 
 // ─── SHARED COLOR HELPER ──────────────────────────────────────────────────────
 function camStatusColor(cam, isViolent) {
-  if (isViolent && cam.is_ai) return '#dc2626';
-  if (!cam.is_active)         return '#64748b';
-  if (cam.is_ai)              return '#0284c7';
-  return '#22c55e';
+  if (isViolent && cam.is_ai) return '#b91c1c'; // bold red on light map
+  if (!cam.is_active)         return '#94a3b8'; // muted grey
+  if (cam.is_ai)              return '#1d4ed8'; // strong blue
+  return '#15803d';                             // strong green
 }
 
 // ─── CITY ZONE MAP (sidebar, compact) ────────────────────────────────────────
@@ -102,7 +102,7 @@ function CityZoneMap({ isViolent, onCamSelect, focusedCam, cameras = [], onExpan
         <MapContainer center={defaultCenter} zoom={13}
           style={{ height:'100%', width:'100%', background:'#0f172a' }}
           zoomControl={false} scrollWheelZoom={false} attributionControl={false}>
-          <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />
+          <TileLayer url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" />
           <MapAutoCenter cameras={cameras} />
           {cameras.map(cam => {
             if (!hasGps(cam)) return null;
@@ -152,7 +152,7 @@ function FullMapOverlay({ cameras, isViolent, onClose }) {
           </span>
         </div>
         <div className="fmap-legend">
-          {[['#22c55e','Online'],['#0284c7','AI Active'],['#dc2626','Threat'],['#64748b','Offline']].map(([c,l]) => (
+          {[['#15803d','Online'],['#1d4ed8','AI Active'],['#b91c1c','Threat'],['#94a3b8','Offline']].map(([c,l]) => (
             <span key={l} className="fmap-leg-item">
               <span className="fmap-leg-dot" style={{ background:c }} />
               {l}
@@ -166,7 +166,7 @@ function FullMapOverlay({ cameras, isViolent, onClose }) {
         <MapContainer center={defaultCenter} zoom={13}
           style={{ height:'100%', width:'100%', background:'#0f172a' }}
           zoomControl={true} scrollWheelZoom={true} attributionControl={false}>
-          <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          <TileLayer url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
             attribution='&copy; <a href="https://carto.com/">CARTO</a>' />
           <MapAutoCenter cameras={cameras} />
           {cameras.map(cam => {
@@ -195,6 +195,69 @@ function FullMapOverlay({ cameras, isViolent, onClose }) {
             ⚠ {noGpsActive.map(c => c.name).join(', ')} — no GPS set. Go to CAMERAS tab → Edit to add coordinates.
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ─── EVIDENCE VIEWER (full-screen video / snapshot) ──────────────────────────
+function EvidenceModal({ incident, onClose }) {
+  const videoSrc = incident.video_path    ? `${API_HOST}${incident.video_path}`    : null;
+  const snapSrc  = incident.snapshot_path ? `${API_HOST}${incident.snapshot_path}` : null;
+
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="ev-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="ev-modal">
+
+        <div className="ev-header">
+          <div className="ev-meta">
+            <span className="ev-badge">INC-{String(incident.id).padStart(4,'0')}</span>
+            <span className="ev-cam">{incident.camera || 'CAM-01'}</span>
+            <span className="ev-time">{incident.timestamp}</span>
+            {incident.confidence > 0 && (
+              <span className="ev-conf" style={{ color:'#dc2626' }}>{incident.confidence}% confidence</span>
+            )}
+          </div>
+          <div className="ev-actions">
+            {videoSrc && (
+              <a className="ev-download-btn" href={videoSrc} download title="Download clip">
+                ↓ Download clip
+              </a>
+            )}
+            <button className="ev-close-btn" onClick={onClose}>✕ Close <kbd>ESC</kbd></button>
+          </div>
+        </div>
+
+        <div className="ev-body">
+          {videoSrc ? (
+            <video
+              className="ev-video"
+              src={videoSrc}
+              controls
+              autoPlay
+              loop
+              onError={e => { e.target.style.display = 'none'; }}
+            />
+          ) : snapSrc ? (
+            <img className="ev-image" src={snapSrc} alt="Evidence snapshot"
+              onError={e => { e.target.style.display = 'none'; }} />
+          ) : (
+            <div className="ev-empty">No evidence media available</div>
+          )}
+        </div>
+
+        <div className="ev-footer">
+          <span className="ev-desc">{incident.description}</span>
+          {incident.reviewed_by && (
+            <span className="ev-reviewed">Actioned by {incident.reviewed_by}</span>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -294,9 +357,11 @@ function DispatchModal({ incident, onConfirm, onClose }) {
 }
 
 // ─── INCIDENT TRIAGE ──────────────────────────────────────────────────────────
-function IncidentTriagePanel({ incidents, onAction, alarmsArmed }) {
+function IncidentTriagePanel({ incidents, onAction, alarmsArmed, isAdmin, onClearIncidents }) {
   const [filter,          setFilter]          = useState('ALL');
   const [dispatchTarget,  setDispatchTarget]   = useState(null);
+  const [clearPhase,      setClearPhase]       = useState('idle'); // idle | confirm | clearing
+  const [evidenceInc,     setEvidenceInc]      = useState(null);
 
   const counts = { UNREVIEWED:0, CONFIRMED:0, DISMISSED:0, DISPATCHED:0, ESCALATED:0 };
   incidents.forEach(i => { const s = i.review_status || 'UNREVIEWED'; if (counts[s] !== undefined) counts[s]++; });
@@ -307,11 +372,34 @@ function IncidentTriagePanel({ incidents, onAction, alarmsArmed }) {
     setDispatchTarget(null);
   };
 
+  const handleClear = async () => {
+    setClearPhase('clearing');
+    await onClearIncidents();
+    setClearPhase('idle');
+  };
+
   return (
     <div className="glass-panel triage-panel">
       <div className="panel-header">
         <span className="panel-title">INCIDENT TRIAGE</span>
-        <span className="pill-mono pill-gray">{incidents.length} TOTAL</span>
+        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+          <span className="pill-mono pill-gray">{incidents.length} TOTAL</span>
+          {isAdmin && incidents.length > 0 && clearPhase === 'idle' && (
+            <button className="triage-clear-btn" onClick={() => setClearPhase('confirm')} title="Clear all incidents">
+              ✕ Clear All
+            </button>
+          )}
+          {isAdmin && clearPhase === 'confirm' && (
+            <span className="triage-clear-confirm">
+              Sure?&nbsp;
+              <button className="tc-clear-yes" onClick={handleClear}>Yes</button>
+              <button className="tc-clear-no"  onClick={() => setClearPhase('idle')}>No</button>
+            </span>
+          )}
+          {isAdmin && clearPhase === 'clearing' && (
+            <span className="triage-clearing">Clearing…</span>
+          )}
+        </div>
       </div>
       <div className="filter-row">
         {['ALL','UNREVIEWED','CONFIRMED','DISPATCHED','DISMISSED'].map(f => (
@@ -339,34 +427,18 @@ function IncidentTriagePanel({ incidents, onAction, alarmsArmed }) {
                   <span className="tc-conf-label">{inc.confidence}%</span>
                 </div>
               )}
-              {/* ── Evidence: video (primary) + snapshot (fallback) ── */}
+              {/* ── Evidence thumbnail — click to open full-screen viewer ── */}
               {(inc.video_path || inc.snapshot_path) && (
-                <div className="tc-evidence">
-                  {inc.video_path && (
-                    <div className="tc-video-wrap">
-                      <video
-                        src={`${API_HOST}${inc.video_path}`}
-                        controls
-                        muted
-                        preload="metadata"
-                        className="tc-video"
-                        onError={e => e.target.parentElement.style.display='none'}
-                      />
-                      <div className="tc-evidence-label">▶ EVIDENCE VIDEO · {inc.camera || 'CAM-01'}</div>
-                    </div>
-                  )}
-                  {inc.snapshot_path && (
-                    <div className={inc.video_path ? 'tc-snap-thumb' : 'tc-snap-full'}>
-                      <img
-                        src={`${API_HOST}${inc.snapshot_path}`}
-                        alt="Evidence snapshot"
-                        className="tc-snap-img"
-                        onError={e => e.target.style.display='none'}
-                      />
-                      <div className="tc-evidence-label">📷 EVIDENCE FRAME</div>
-                    </div>
-                  )}
-                </div>
+                <button className="tc-evidence-thumb" onClick={() => setEvidenceInc(inc)}>
+                  {inc.snapshot_path
+                    ? <img src={`${API_HOST}${inc.snapshot_path}`} alt="evidence"
+                        className="tc-thumb-img" onError={e => e.target.style.display='none'} />
+                    : <div className="tc-thumb-placeholder">▶</div>
+                  }
+                  <div className="tc-thumb-overlay">
+                    <span>{inc.video_path ? '▶ View Clip' : '🔍 View Snapshot'}</span>
+                  </div>
+                </button>
               )}
               {st === 'UNREVIEWED' && (
                 <div className="tc-actions">
@@ -402,6 +474,12 @@ function IncidentTriagePanel({ incidents, onAction, alarmsArmed }) {
           incident={dispatchTarget}
           onConfirm={handleDispatchConfirm}
           onClose={() => setDispatchTarget(null)}
+        />
+      )}
+      {evidenceInc && (
+        <EvidenceModal
+          incident={evidenceInc}
+          onClose={() => setEvidenceInc(null)}
         />
       )}
     </div>
@@ -754,8 +832,9 @@ export default function App() {
     return () => { clearInterval(poll); stopSiren(); };
   }, [alarmsArmed, isViolent, startSiren, stopSiren]);
 
-  // ── Camera DB Polling (always-on, powers the live matrix) ─────────────────
+  // ── Camera DB Polling (starts only after Firebase auth is ready) ─────────────
   useEffect(() => {
+    if (!user) return;
     const loadCams = () =>
       authFetch(`${API_BASE}/cameras`)
         .then(r => r.ok ? r.json() : Promise.reject())
@@ -764,16 +843,16 @@ export default function App() {
     loadCams();
     const t = setInterval(loadCams, 5000);
     return () => clearInterval(t);
-  }, []);
+  }, [user]);
 
   // ── Incident Polling ───────────────────────────────────────────────────────
   useEffect(() => {
-    if (!alarmsArmed) return;
+    if (!alarmsArmed || !user) return;
     const load = () => authFetch(`${API_BASE}/incidents`).then(r => r.json()).then(setIncidents).catch(() => {});
     load();
     const t = setInterval(load, 2000);
     return () => clearInterval(t);
-  }, [alarmsArmed]);
+  }, [alarmsArmed, user]);
 
   // ── Threshold Sync ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -796,6 +875,11 @@ export default function App() {
       body: JSON.stringify(payload),
     }).catch(() => {});
   }, [fullName]);
+
+  const handleClearIncidents = useCallback(async () => {
+    await authFetch(`${API_BASE}/admin/clear-incidents`, { method: 'DELETE' }).catch(() => {});
+    setIncidents([]);
+  }, []);
 
   // ── Auth guards ────────────────────────────────────────────────────────────
   if (authLoading) {
@@ -1082,7 +1166,8 @@ export default function App() {
               cameras={dbCameras} onExpand={() => setShowFullMap(true)} />
 
             {/* Triage — both roles */}
-            <IncidentTriagePanel incidents={incidents} onAction={handleTriageAction} alarmsArmed={alarmsArmed} />
+            <IncidentTriagePanel incidents={incidents} onAction={handleTriageAction}
+              alarmsArmed={alarmsArmed} isAdmin={isAdmin} onClearIncidents={handleClearIncidents} />
           </aside>
         </div>
       )}

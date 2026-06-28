@@ -122,3 +122,16 @@ async def reset_database(user=Depends(require_admin)):
     log_audit(user.get("email", "unknown"), "SYSTEM_RESET",
               "Full database reset — all cameras, incidents, and audit logs cleared")
     return {"cleared": True, "message": "Database reset successfully"}
+
+
+@router.delete("/admin/clear-incidents", status_code=200)
+async def clear_incidents(user=Depends(require_admin)):
+    """Delete all recorded incidents and their audit trail. Cameras are untouched."""
+    conn = get_db()
+    conn.execute("DELETE FROM incidents")
+    conn.execute("DELETE FROM system_audit_logs WHERE action_type LIKE 'INCIDENT_%'")
+    conn.commit()
+    conn.close()
+    log_audit(user.get("email", "unknown"), "SYSTEM_RESET",
+              "All incidents cleared by admin")
+    return {"cleared": True}

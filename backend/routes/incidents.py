@@ -8,8 +8,24 @@ from datetime import datetime
 from database import get_db, log_audit
 from models.schemas import IncidentStatusUpdate
 from middleware.auth import verify_firebase_token
+from utils.email_alert import send_dispatch_alert
 
 router = APIRouter(prefix="/api", tags=["incidents"])
+
+
+@router.get("/admin/test-email")
+async def test_email(user=Depends(verify_firebase_token)):
+    """Send a test email immediately and return the result."""
+    result = send_dispatch_alert({
+        "id": 0,
+        "camera_id": "CAM-01",
+        "description": "Test alert — email integration check",
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "confidence": 0.92,
+        "snapshot_path": "",
+        "reviewed_by": user.get("email", "admin"),
+    })
+    return {"email_sent": result}
 
 
 @router.get("/incidents")
@@ -59,4 +75,10 @@ async def update_incident_status(incident_id: int, body: IncidentStatusUpdate, u
     log_audit(actor, f"INCIDENT_{body.status}",
               f"Incident #{incident_id} marked {body.status} by {body.reviewed_by or actor}")
 
-    return dict(updated)
+    email_sent = False
+    if body.status == "DISPATCHED":
+        email_sent = send_dispatch_alert(dict(updated))
+
+    result = dict(updated)
+    result["email_sent"] = email_sent
+    return result
