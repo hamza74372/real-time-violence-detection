@@ -10,6 +10,31 @@ import { API_BASE } from './config';
 
 const AuthContext = createContext(null);
 
+// Fetch role from backend with retries — keeps trying until backend is ready
+async function fetchRoleFromBackend(fbUser, maxAttempts = 8) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const token = await fbUser.getIdToken();
+      const ctrl  = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
+      const res   = await fetch(`${API_BASE}/users`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal:  ctrl.signal,
+      }).finally(() => clearTimeout(timer));
+
+      if (res.ok) {
+        const users  = await res.json();
+        const dbUser = users.find(u => u.email.toLowerCase() === fbUser.email.toLowerCase());
+        if (dbUser) return { role: dbUser.role || 'operator', profile: dbUser };
+      }
+    } catch {
+      // backend not ready yet — wait and retry
+    }
+    if (attempt < maxAttempts) await new Promise(r => setTimeout(r, 2000));
+  }
+  return null; // all attempts failed
+}
+
 export function AuthProvider({ children }) {
   const [user,    setUser]    = useState(null);
   const [role,    setRole]    = useState(null);
@@ -17,72 +42,30 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState('');
 
-  // Firebase restores session automatically — just listen
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (fbUser) => {
       if (fbUser) {
         setUser(fbUser);
-        try {
-          // Use fbUser.getIdToken() directly — auth.currentUser may still be null
-          // during the initial session-restore fire of onAuthStateChanged.
-          const token = await fbUser.getIdToken();
-          // 6-second timeout so a slow/starting backend never blocks the UI
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 6000);
-          const res = await fetch(`${API_BASE}/users`, {
-            headers: { Authorization: `Bearer ${token}` },
-            signal: ctrl.signal,
-          }).finally(() => clearTimeout(timer));
-          if (res.ok) {
-            const users = await res.json();
-            const dbUser = users.find(u => u.email.toLowerCase() === fbUser.email.toLowerCase());
-            if (dbUser) {
-              setRole(dbUser.role || 'operator');
-              setProfile(dbUser);
-            } else {
-              // Fallback to client-side Firestore SDK if backend lookup doesn't find the user
-              const snap = await getDoc(doc(db, 'users', fbUser.email));
-              if (snap.exists()) {
-                const data = snap.data();
-                setRole(data.role || 'operator');
-                setProfile(data);
-              } else {
-                setRole('operator');
-                setProfile({ full_name: fbUser.email, role: 'operator' });
-              }
-            }
-          } else {
-            // Fallback to client-side Firestore SDK if API call returns an error status
-            const snap = await getDoc(doc(db, 'users', fbUser.email));
-            if (snap.exists()) {
-              const data = snap.data();
-              setRole(data.role || 'operator');
-              setProfile(data);
-            } else {
-              setRole('operator');
-              setProfile({ full_name: fbUser.email, role: 'operator' });
-            }
-          }
-        } catch (err) {
-          console.error("Error retrieving user role from API:", err);
+        // Show the app immediately with operator role while we fetch the real role
+        setRole('operator');
+        setProfile({ full_name: fbUser.email, role: 'operator' });
+        setLoading(false);
+
+        // Fetch real role in background — retries every 2s for up to 16s
+        const result = await fetchRoleFromBackend(fbUser);
+        if (result) {
+          setRole(result.role);
+          setProfile(result.profile);
+        } else {
+          // Backend unavailable — try Firestore as last resort
           try {
-            // Fallback to client-side Firestore SDK if fetch fails (e.g. network/CORS error)
             const snap = await getDoc(doc(db, 'users', fbUser.email));
             if (snap.exists()) {
               const data = snap.data();
               setRole(data.role || 'operator');
               setProfile(data);
-            } else {
-              setRole('operator');
-              setProfile({ full_name: fbUser.email, role: 'operator' });
             }
-          } catch (innerErr) {
-            console.error("Firestore SDK fallback failed:", innerErr);
-            setRole('operator');
-            setProfile({ full_name: fbUser.email, role: 'operator' });
-          }
-        } finally {
-          setLoading(false);
+          } catch { /* stay as operator */ }
         }
       } else {
         setUser(null);

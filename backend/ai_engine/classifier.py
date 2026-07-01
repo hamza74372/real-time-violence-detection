@@ -44,6 +44,14 @@ from config import YOLO_MODEL_PATH
 yolo_model   = YOLO(YOLO_MODEL_PATH)
 action_model = ViolenceClassifier().to(device)
 
+# Pose model for geometric fight detection — auto-downloads yolov8n-pose.pt
+try:
+    pose_model = YOLO('yolov8n-pose.pt')
+    print("Pose model loaded.")
+except Exception as _e:
+    pose_model = None
+    print(f"Warning: Pose model unavailable ({_e}). Running without pose detection.")
+
 try:
     action_model.load_state_dict(torch.load(WEIGHTS_PATH, map_location=device))
     print("Model weights loaded successfully.")

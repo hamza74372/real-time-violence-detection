@@ -263,118 +263,34 @@ function EvidenceModal({ incident, onClose }) {
   );
 }
 
-// ─── DISPATCH MODAL ───────────────────────────────────────────────────────────
-const UNITS = ['ALPHA-1','BRAVO-2','CHARLIE-3','DELTA-4','ECHO-5','FOXTROT-6','GAMMA-7','HAWK-8'];
-
-function DispatchModal({ incident, onConfirm, onClose }) {
-  const unitName = UNITS[incident.id % UNITS.length];
-  const etaBase  = 180 + (incident.id % 5) * 60;   // 3–7 mins, deterministic
-  const [etaSecs, setEtaSecs] = useState(etaBase);
-  const [phase,   setPhase]   = useState('dispatch'); // dispatch | en-route | done
-
-  useEffect(() => {
-    if (phase === 'done') return;
-    const t = setInterval(() => {
-      setEtaSecs(prev => {
-        if (prev <= 1) { clearInterval(t); setPhase('done'); return 0; }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(t);
-  }, [phase]);
-
-  const fmtEta = s => `${String(Math.floor(s / 60)).padStart(2,'0')}:${String(s % 60).padStart(2,'0')}`;
-  const progress = Math.round(((etaBase - etaSecs) / etaBase) * 100);
-
-  return (
-    <div className="dispatch-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="dispatch-modal">
-
-        {/* Header */}
-        <div className="dm-header">
-          <div className="dm-siren">
-            <span className="dm-siren-light dm-siren-red" />
-            <span className="dm-siren-light dm-siren-blue" />
-          </div>
-          <div className="dm-title">POLICE DISPATCH ACTIVATED</div>
-          <button className="dm-close" onClick={onClose}>✕</button>
-        </div>
-
-        {/* Incident summary */}
-        <div className="dm-incident-row">
-          <div className="dm-tag">{incident.camera || 'CAM-01'}</div>
-          <div className="dm-incident-desc">{incident.description}</div>
-          <div className="dm-timestamp">{incident.timestamp}</div>
-        </div>
-
-        {/* Animated route track */}
-        <div className="dm-route-track">
-          <div className="dm-route-label dm-label-left">DISPATCH HQ</div>
-          <div className="dm-route-line">
-            <div className="dm-route-fill" style={{ width:`${progress}%` }} />
-            <div className="dm-unit-dot" style={{ left:`${progress}%` }}>
-              <span className="dm-unit-pulse" />
-            </div>
-          </div>
-          <div className="dm-route-label dm-label-right">INCIDENT SITE</div>
-        </div>
-
-        {/* Unit info */}
-        <div className="dm-info-grid">
-          <div className="dm-info-cell">
-            <div className="dm-info-label">UNIT ASSIGNED</div>
-            <div className="dm-info-value dm-unit-name">{unitName}</div>
-          </div>
-          <div className="dm-info-cell">
-            <div className="dm-info-label">STATUS</div>
-            <div className={`dm-info-value ${phase === 'done' ? 'dm-status-arrived' : 'dm-status-enroute'}`}>
-              {phase === 'done' ? '✓ ON SITE' : 'EN ROUTE'}
-            </div>
-          </div>
-          <div className="dm-info-cell">
-            <div className="dm-info-label">ETA</div>
-            <div className={`dm-info-value dm-eta ${phase === 'done' ? 'dm-status-arrived' : ''}`}>
-              {phase === 'done' ? '00:00' : fmtEta(etaSecs)}
-            </div>
-          </div>
-          <div className="dm-info-cell">
-            <div className="dm-info-label">INCIDENT REF</div>
-            <div className="dm-info-value">INC-{String(incident.id).padStart(4,'0')}</div>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="dm-footer">
-          <button className="dm-btn-confirm" onClick={() => onConfirm(incident)}>
-            Confirm &amp; Log Dispatch
-          </button>
-          <button className="dm-btn-cancel" onClick={onClose}>Cancel</button>
-        </div>
-
-      </div>
-    </div>
-  );
-}
+// DispatchModal removed — email is sent directly from the triage card
 
 // ─── INCIDENT TRIAGE ──────────────────────────────────────────────────────────
-function IncidentTriagePanel({ incidents, onAction, alarmsArmed, isAdmin, onClearIncidents }) {
-  const [filter,          setFilter]          = useState('ALL');
-  const [dispatchTarget,  setDispatchTarget]   = useState(null);
-  const [clearPhase,      setClearPhase]       = useState('idle'); // idle | confirm | clearing
-  const [evidenceInc,     setEvidenceInc]      = useState(null);
+function IncidentTriagePanel({ incidents, onAction, alarmsArmed, isAdmin, onClearIncidents, clearedBefore }) {
+  const [filter,      setFilter]      = useState('ALL');
+  const [sendingId,   setSendingId]   = useState(null);
+  const [clearPhase,  setClearPhase]  = useState('idle');
+  const [evidenceInc, setEvidenceInc] = useState(null);
+
+  // Filter out incidents created before the last "Clear All" — analytics DB is untouched
+  // Replace space with T so Safari/WebKit can parse the SQLite timestamp format
+  const visible = clearedBefore
+    ? incidents.filter(i => new Date(i.timestamp.replace(' ', 'T')) >= new Date(clearedBefore))
+    : incidents;
 
   const counts = { UNREVIEWED:0, CONFIRMED:0, DISMISSED:0, DISPATCHED:0, ESCALATED:0 };
-  incidents.forEach(i => { const s = i.review_status || 'UNREVIEWED'; if (counts[s] !== undefined) counts[s]++; });
-  const list = filter === 'ALL' ? incidents : incidents.filter(i => (i.review_status || 'UNREVIEWED') === filter);
+  visible.forEach(i => { const s = i.review_status || 'UNREVIEWED'; if (counts[s] !== undefined) counts[s]++; });
+  const list = filter === 'ALL' ? visible : visible.filter(i => (i.review_status || 'UNREVIEWED') === filter);
 
-  const handleDispatchConfirm = (inc) => {
-    onAction(inc.id, 'DISPATCHED');
-    setDispatchTarget(null);
+  const handleNotify = async (inc) => {
+    setSendingId(inc.id);
+    await onAction(inc.id, 'DISPATCHED');
+    setSendingId(null);
   };
 
-  const handleClear = async () => {
+  const handleClear = () => {
     setClearPhase('clearing');
-    await onClearIncidents();
+    onClearIncidents();
     setClearPhase('idle');
   };
 
@@ -383,20 +299,20 @@ function IncidentTriagePanel({ incidents, onAction, alarmsArmed, isAdmin, onClea
       <div className="panel-header">
         <span className="panel-title">INCIDENT TRIAGE</span>
         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-          <span className="pill-mono pill-gray">{incidents.length} TOTAL</span>
-          {isAdmin && incidents.length > 0 && clearPhase === 'idle' && (
+          <span className="pill-mono pill-gray">{visible.length} TOTAL</span>
+          {visible.length > 0 && clearPhase === 'idle' && (
             <button className="triage-clear-btn" onClick={() => setClearPhase('confirm')} title="Clear all incidents">
               ✕ Clear All
             </button>
           )}
-          {isAdmin && clearPhase === 'confirm' && (
+          {clearPhase === 'confirm' && (
             <span className="triage-clear-confirm">
               Sure?&nbsp;
               <button className="tc-clear-yes" onClick={handleClear}>Yes</button>
               <button className="tc-clear-no"  onClick={() => setClearPhase('idle')}>No</button>
             </span>
           )}
-          {isAdmin && clearPhase === 'clearing' && (
+          {clearPhase === 'clearing' && (
             <span className="triage-clearing">Clearing…</span>
           )}
         </div>
@@ -409,8 +325,7 @@ function IncidentTriagePanel({ incidents, onAction, alarmsArmed, isAdmin, onClea
         ))}
       </div>
       <div className="triage-scroll">
-        {!alarmsArmed && <div className="empty-state"><div className="empty-icon">⬡</div><p>Arm network to begin monitoring</p></div>}
-        {alarmsArmed && list.length===0 && <div className="empty-state"><div className="empty-icon">✓</div><p>No incidents in this category</p></div>}
+        {list.length===0 && <div className="empty-state"><div className="empty-icon">{alarmsArmed ? '✓' : '⬡'}</div><p>{alarmsArmed ? 'No incidents in this category' : 'No incidents yet — arm network to begin live monitoring'}</p></div>}
         {list.map(inc => {
           const st = inc.review_status || 'UNREVIEWED';
           return (
@@ -449,16 +364,18 @@ function IncidentTriagePanel({ incidents, onAction, alarmsArmed, isAdmin, onClea
               )}
               {st === 'CONFIRMED' && (
                 <div className="tc-actions">
-                  <button className="tc-btn btn-dispatch" onClick={() => setDispatchTarget(inc)}>
-                    🚔 Dispatch Police
+                  <button
+                    className="tc-btn btn-dispatch"
+                    disabled={sendingId === inc.id}
+                    onClick={() => handleNotify(inc)}
+                  >
+                    {sendingId === inc.id ? '⏳ Sending...' : '📧 Inform Concerned Authority'}
                   </button>
                 </div>
               )}
               {st === 'DISPATCHED' && (
                 <div className="tc-dispatched-row">
-                  <span className="tc-dispatched-unit">
-                    ▶ {UNITS[inc.id % UNITS.length]} dispatched
-                  </span>
+                  <span className="tc-dispatched-unit">✓ Authority Notified via Email</span>
                 </div>
               )}
               {st !== 'UNREVIEWED' && inc.reviewed_by && (
@@ -469,13 +386,6 @@ function IncidentTriagePanel({ incidents, onAction, alarmsArmed, isAdmin, onClea
         })}
       </div>
 
-      {dispatchTarget && (
-        <DispatchModal
-          incident={dispatchTarget}
-          onConfirm={handleDispatchConfirm}
-          onClose={() => setDispatchTarget(null)}
-        />
-      )}
       {evidenceInc && (
         <EvidenceModal
           incident={evidenceInc}
@@ -486,147 +396,293 @@ function IncidentTriagePanel({ incidents, onAction, alarmsArmed, isAdmin, onClea
   );
 }
 
-// ─── ANALYTICS ────────────────────────────────────────────────────────────────
-function AnalyticsDashboard({ incidents, cameras = [] }) {
-  const [range, setRange] = useState('all');
+// ─── ANALYTICS CHART HELPERS ──────────────────────────────────────────────────
+function AreaChart({ data = [], xKey = 'day', yKey = 'total', y2Key = null }) {
+  if (data.length < 2) return (
+    <div style={{ height:130, display:'flex', alignItems:'center', justifyContent:'center',
+      color:'var(--text-muted)', fontSize:'0.65rem', fontFamily:'var(--font-mono)' }}>
+      No data for this period
+    </div>
+  );
+  const W=600, H=130, PL=28, PB=20, PT=6, PR=8;
+  const cW=W-PL-PR, cH=H-PB-PT;
+  const maxV = Math.max(...data.map(d => d[yKey]||0), 1);
+  const xS = i => PL + (i/(data.length-1))*cW;
+  const yS = v => PT + cH - ((v||0)/maxV)*cH;
+  const pts  = data.map((d,i) => `${xS(i)},${yS(d[yKey]||0)}`).join(' ');
+  const area = `${PL},${PT+cH} ${pts} ${PL+cW},${PT+cH}`;
+  const pts2 = y2Key ? data.map((d,i) => `${xS(i)},${yS(d[y2Key]||0)}`).join(' ') : null;
+  const step  = Math.max(1, Math.ceil(data.length/8));
+  const xLbls = data.reduce((acc,d,i) => {
+    if (i%step===0 || i===data.length-1) acc.push({ i, lbl: String(d[xKey]).slice(-5) });
+    return acc;
+  }, []);
+  const yTicks = [0, Math.round(maxV/2), maxV];
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" style={{ display:'block' }}>
+      <defs>
+        <linearGradient id="ag1" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#dc2626" stopOpacity="0.22"/>
+          <stop offset="100%" stopColor="#dc2626" stopOpacity="0.01"/>
+        </linearGradient>
+      </defs>
+      {yTicks.map(v => (
+        <g key={v}>
+          <line x1={PL} y1={yS(v)} x2={W-PR} y2={yS(v)} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="3,4"/>
+          <text x={PL-3} y={yS(v)+3} textAnchor="end" fill="var(--text-muted)" fontSize="7.5" fontFamily="'DM Mono',monospace">{v}</text>
+        </g>
+      ))}
+      <polygon points={area} fill="url(#ag1)"/>
+      <polyline points={pts} fill="none" stroke="#dc2626" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round"/>
+      {pts2 && <polyline points={pts2} fill="none" stroke="#22c55e" strokeWidth="1.2" strokeLinejoin="round" strokeDasharray="4,3"/>}
+      {xLbls.map(({ i, lbl }) => (
+        <text key={i} x={xS(i)} y={H-3} textAnchor="middle" fill="var(--text-muted)" fontSize="7" fontFamily="'DM Mono',monospace">{lbl}</text>
+      ))}
+    </svg>
+  );
+}
 
-  const now = Date.now();
+function HBarGroup({ data = [], labelKey = 'label', valKey = 'count', color = 'var(--accent)' }) {
+  const max = Math.max(...data.map(d => d[valKey]||0), 1);
+  if (!data.length) return <div style={{ color:'var(--text-muted)', fontSize:'0.62rem', fontFamily:'var(--font-mono)' }}>No data</div>;
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:9 }}>
+      {data.map((d,i) => (
+        <div key={i} style={{ display:'flex', alignItems:'center', gap:9 }}>
+          <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.57rem', color:'var(--text-secondary)', width:58, flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+            {d[labelKey]}
+          </span>
+          <div style={{ flex:1, height:6, background:'var(--surface-4)', borderRadius:3, overflow:'hidden' }}>
+            <div style={{ height:'100%', width:`${((d[valKey]||0)/max)*100}%`, background:color, borderRadius:3, transition:'width 0.5s ease' }}/>
+          </div>
+          <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.6rem', color:'var(--text-primary)', width:24, textAlign:'right' }}>{d[valKey]}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function VBars({ data = [], labelKey = 'label', valKey = 'count', color = '#dc2626', h = 80 }) {
+  const max = Math.max(...data.map(d => d[valKey]||0), 1);
+  return (
+    <div style={{ display:'flex', alignItems:'flex-end', gap:2, height:h }}>
+      {data.map((d,i) => (
+        <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', height:'100%' }}
+          title={`${d[labelKey]||i}: ${d[valKey]}`}>
+          <div style={{ flex:1, display:'flex', alignItems:'flex-end', width:'100%' }}>
+            <div style={{
+              width:'100%', borderRadius:'3px 3px 0 0',
+              height:`${((d[valKey]||0)/max)*100}%`,
+              minHeight: d[valKey]>0 ? 2 : 0,
+              background: d[valKey]>0 ? color : 'var(--surface-4)',
+              opacity: d[valKey]>0 ? (0.3+((d[valKey]||0)/max)*0.7) : 1,
+              transition:'height 0.4s ease',
+            }}/>
+          </div>
+          {d[labelKey] !== '' && d[labelKey] !== undefined && (
+            <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.42rem', color:'var(--text-muted)', marginTop:2 }}>{d[labelKey]}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── ANALYTICS DASHBOARD ──────────────────────────────────────────────────────
+function AnalyticsDashboard({ incidents }) {
+  const [range,     setRange]  = useState('30d');
+  const [data,      setData]   = useState(null);
+  const [busy,      setBusy]   = useState(true);
+  const [fetchErr,  setFetchErr] = useState(false);
+  const [tick,      setTick]   = useState(0);
+
   const RANGES = [
-    { key:'24h', label:'24 h' },
-    { key:'7d',  label:'7 d'  },
-    { key:'30d', label:'30 d' },
-    { key:'all', label:'All'  },
+    { key:'7d',  label:'7 Days'  },
+    { key:'30d', label:'30 Days' },
+    { key:'90d', label:'90 Days' },
   ];
-  const filtered = incidents.filter(inc => {
-    if (range === 'all') return true;
-    const ms = { '24h': 864e5, '7d': 6048e5, '30d': 2592e6 }[range];
-    return now - new Date(inc.timestamp).getTime() < ms;
-  });
 
-  const hours = Array.from({ length:24 }, (_,h) => ({ h, count:0 }));
-  filtered.forEach(inc => { try { hours[new Date(inc.timestamp).getHours()].count++; } catch {} });
-  const maxH = Math.max(...hours.map(h => h.count), 1);
+  useEffect(() => {
+    let dead = false;
+    setBusy(true);
+    setFetchErr(false);
+    authFetch(`${API_BASE}/analytics?time_range=${range}`)
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(d => { if (!dead) { setData(d); setBusy(false); } })
+      .catch(() => { if (!dead) { setBusy(false); setFetchErr(true); } });
+    return () => { dead = true; };
+  }, [range, tick]);
 
-  const confirmed  = filtered.filter(i => i.review_status==='CONFIRMED').length;
-  const dismissed  = filtered.filter(i => i.review_status==='DISMISSED').length;
-  const unreviewed = filtered.filter(i => !i.review_status||i.review_status==='UNREVIEWED').length;
-  const total      = filtered.length;
-  const accuracy   = total>0 ? Math.round((confirmed/Math.max(confirmed+dismissed,1))*100) : 0;
+  // Auto-refresh every 30 s so confirmed incidents appear without manual action
+  useEffect(() => {
+    const t = setInterval(() => setTick(n => n + 1), 30000);
+    return () => clearInterval(t);
+  }, []);
 
-  const camBars = cameras.map(c => ({
-    name: c.name,
-    count: filtered.filter(i => i.camera===c.name||(!i.camera&&c.id===1)).length,
-  }));
-  const maxCam = Math.max(...camBars.map(c => c.count), 1);
+  const s          = data?.summary      ?? {};
+  const daily      = data?.daily        ?? [];
+  const hourly     = data?.hourly       ?? [];
+  const camData    = data?.cameras      ?? [];
+  const confData   = data?.conf_buckets ?? [];
+  const weeklyData = data?.weekly       ?? [];
 
-  const donutData = [
-    { label:'Unreviewed', v:unreviewed, color:'#94a3b8' },
-    { label:'Confirmed',  v:confirmed,  color:'#dc2626' },
-    { label:'Dismissed',  v:dismissed,  color:'#d97706' },
+  const reviewed  = (s.confirmed||0) + (s.dismissed||0);
+  const precision = reviewed > 0 ? Math.round(((s.confirmed||0)/reviewed)*100) : 0;
+  const peakH     = hourly.length ? hourly.reduce((m,h) => h.count > m.count ? h : m, hourly[0]) : null;
+
+  // Donut
+  let dOff = 0;
+  const dCirc = 219.9;
+  const dTotal = Math.max(s.total||0, 1);
+  const donutRows = [
+    { label:'Unreviewed', v: Math.max((s.total||0)-(s.confirmed||0)-(s.dismissed||0), 0), color:'#64748b' },
+    { label:'Confirmed',  v: s.confirmed||0, color:'#dc2626' },
+    { label:'Dismissed',  v: s.dismissed||0, color:'#d97706' },
   ];
-  const donutTotal = donutData.reduce((s,d) => s+d.v, 0) || 1;
-  let donutOffset  = 0;
+
+  const kpis = [
+    { label:'TOTAL INCIDENTS',   val: s.total||0,              color:'var(--text-primary)', sub: null },
+    { label:'CONFIRMED THREATS', val: s.confirmed||0,          color:'var(--red)',           sub: null },
+    { label:'FALSE POSITIVES',   val: s.dismissed||0,          color:'var(--amber)',         sub: null },
+    { label:'PRECISION',         val: `${precision}%`,         color:'var(--accent)',        sub: `${reviewed} reviewed` },
+    { label:'AVG CONFIDENCE',    val: `${s.avg_confidence||0}%`, color:'var(--accent)',      sub: null },
+    { label:'THIS WEEK',         val: s.this_week||0,
+      color: (s.week_change_pct||0) > 0 ? 'var(--red)' : 'var(--accent)',
+      sub: (s.week_change_pct||0) === 0 ? `${s.last_week||0} last week`
+         : (s.week_change_pct||0)  > 0  ? `▲ ${s.week_change_pct}% vs last wk`
+                                         : `▼ ${Math.abs(s.week_change_pct||0)}% vs last wk` },
+  ];
 
   const exportCSV = () => {
-    const rows = ['id,timestamp,camera,description,status',
-      ...incidents.map(i => `${i.id},"${i.timestamp}","${i.camera||'CAM-01'}","${i.description}","${i.review_status||'UNREVIEWED'}"`)
+    const rows = ['id,timestamp,camera,description,status,confidence',
+      ...incidents.map(i => `${i.id},"${i.timestamp}","${i.camera||''}","${i.description}","${i.review_status||'UNREVIEWED'}","${i.confidence||0}"`)
     ].join('\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([rows], { type:'text/csv' }));
-    a.download = `cityshield_incidents_${Date.now()}.csv`;
+    a.download = `cityshield_report_${range}_${new Date().toISOString().slice(0,10)}.csv`;
     a.click();
   };
 
   return (
     <div className="analytics-root">
-      {/* Date range selector */}
-      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12 }}>
-        <span style={{ fontSize:'0.65rem', fontFamily:'var(--font-mono)', color:'var(--text-muted)', letterSpacing:'0.08em' }}>TIME RANGE</span>
-        {RANGES.map(r => (
-          <button key={r.key}
-            onClick={() => setRange(r.key)}
-            style={{
-              padding:'3px 10px', borderRadius:4, fontSize:'0.65rem',
-              fontFamily:'var(--font-mono)', cursor:'pointer', border:'1px solid',
-              borderColor: range===r.key ? 'var(--accent)' : 'var(--border)',
-              background:  range===r.key ? 'var(--accent)' : 'transparent',
-              color:       range===r.key ? '#fff' : 'var(--text-muted)',
-              transition:'all 0.15s',
-            }}>
-            {r.label}
-          </button>
-        ))}
-        <span style={{ marginLeft:'auto', fontSize:'0.65rem', fontFamily:'var(--font-mono)', color:'var(--text-muted)' }}>
-          {filtered.length} records
+
+      {/* ── Header ── */}
+      <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+        <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.6rem', letterSpacing:'1.6px', color:'var(--text-secondary)', fontWeight:500 }}>
+          INCIDENT ANALYTICS REPORT
         </span>
+        <span style={{ width:1, height:14, background:'var(--border)', display:'inline-block', margin:'0 4px' }}/>
+        {RANGES.map(r => (
+          <button key={r.key} onClick={() => setRange(r.key)} style={{
+            padding:'3px 11px', borderRadius:4, fontSize:'0.63rem', fontFamily:'var(--font-mono)',
+            cursor:'pointer', border:'1px solid',
+            borderColor: range===r.key ? 'var(--accent)' : 'var(--border)',
+            background:  range===r.key ? 'var(--accent)' : 'transparent',
+            color:       range===r.key ? '#fff' : 'var(--text-muted)',
+            transition:'all 0.15s',
+          }}>{r.label}</button>
+        ))}
+        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:8 }}>
+          {fetchErr && (
+            <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.58rem', color:'var(--red)' }}>
+              Backend unreachable — start server and retry
+            </span>
+          )}
+          <button onClick={() => setTick(n => n + 1)} style={{
+            padding:'3px 10px', borderRadius:4, fontSize:'0.6rem', fontFamily:'var(--font-mono)',
+            cursor:'pointer', border:'1px solid var(--border)', background:'transparent',
+            color: busy ? 'var(--text-muted)' : 'var(--accent)', transition:'all 0.15s',
+          }} disabled={busy}>{busy ? 'Loading…' : 'Refresh'}</button>
+          <span style={{ fontSize:'0.6rem', fontFamily:'var(--font-mono)', color:'var(--text-muted)' }}>
+            {!busy && !fetchErr && `${s.total||0} incidents · ${new Date().toLocaleDateString()}`}
+          </span>
+        </div>
       </div>
-      <div className="kpi-row">
-        {[
-          { label:'TOTAL INCIDENTS',  value:total,         color:'var(--text-primary)' },
-          { label:'CONFIRMED THREATS',value:confirmed,     color:'var(--red)' },
-          { label:'FALSE POSITIVES',  value:dismissed,     color:'var(--amber)' },
-          { label:'MODEL PRECISION',  value:`${accuracy}%`,color:'var(--accent)' },
-        ].map(k => (
+
+      {/* ── KPI Row (6 cards) ── */}
+      <div className="kpi-6">
+        {kpis.map(k => (
           <div key={k.label} className="kpi-card glass-panel">
             <div className="kpi-label">{k.label}</div>
-            <div className="kpi-val" style={{ color:k.color }}>{k.value}</div>
+            <div className="kpi-val" style={{ color:k.color, fontSize:'1.6rem' }}>{k.val}</div>
+            {k.sub && (
+              <div style={{ fontFamily:'var(--font-mono)', fontSize:'0.52rem', marginTop:5,
+                color: k.sub.startsWith('▲') ? 'var(--red)' : k.sub.startsWith('▼') ? 'var(--accent)' : 'var(--text-muted)' }}>
+                {k.sub}
+              </div>
+            )}
           </div>
         ))}
       </div>
 
+      {/* ── Main: Daily trend area chart ── */}
+      <div className="glass-panel chart-card">
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+          <div className="chart-title">
+            Daily incident trend — {range==='7d' ? 'last 7 days' : range==='30d' ? 'last 30 days' : 'last 90 days'}
+          </div>
+          <div style={{ display:'flex', gap:14, alignItems:'center' }}>
+            <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.53rem', color:'#dc2626' }}>── All incidents</span>
+            <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.53rem', color:'#22c55e' }}>- - Confirmed</span>
+          </div>
+        </div>
+        {busy
+          ? <div style={{ height:130, display:'flex', alignItems:'center', justifyContent:'center',
+              color:'var(--text-muted)', fontSize:'0.65rem', fontFamily:'var(--font-mono)' }}>Loading chart…</div>
+          : <AreaChart data={daily} xKey="day" yKey="total" y2Key="confirmed"/>
+        }
+      </div>
+
+      {/* ── Row 2: Hourly | Camera breakdown | Donut ── */}
       <div className="charts-row">
         <div className="glass-panel chart-card">
           <div className="chart-title">Incidents by hour of day</div>
-          <div className="heatmap">
-            {hours.map(({ h, count }) => (
-              <div key={h} className="hm-col" title={`${h}:00 — ${count}`}>
-                <div className="hm-wrap">
-                  <div className="hm-bar" style={{
-                    height:`${(count/maxH)*100}%`,
-                    background: count>0 ? `rgba(220,38,38,${0.15+(count/maxH)*0.85})` : 'var(--surface-4)'
-                  }} />
-                </div>
-                {h%6===0 && <span className="hm-label">{h}h</span>}
-              </div>
-            ))}
-          </div>
+          <VBars
+            data={hourly.map(h => ({ label: h.hour%6===0 ? `${h.hour}h` : '', count: h.count }))}
+            valKey="count" labelKey="label" h={76}
+          />
+          {peakH && peakH.count > 0 && (
+            <div style={{ fontFamily:'var(--font-mono)', fontSize:'0.53rem', color:'var(--text-muted)', marginTop:8 }}>
+              Peak: <span style={{ color:'#dc2626' }}>{peakH.hour}:00 – {peakH.hour+1}:00</span> ({peakH.count} incidents)
+            </div>
+          )}
         </div>
 
         <div className="glass-panel chart-card">
           <div className="chart-title">Alerts per camera node</div>
-          <div className="cam-bars">
-            {camBars.map(c => (
-              <div key={c.name} className="cam-bar-row">
-                <span className="cbar-label">{c.name}</span>
-                <div className="cbar-track"><div className="cbar-fill" style={{ width:`${(c.count/maxCam)*100}%` }} /></div>
-                <span className="cbar-count">{c.count}</span>
-              </div>
-            ))}
-          </div>
+          <HBarGroup
+            data={camData.map(c => ({ label: c.camera_id, count: c.total }))}
+            labelKey="label" valKey="count"
+          />
+          {camData.length===0 && !busy && (
+            <div style={{ color:'var(--text-muted)', fontSize:'0.62rem', fontFamily:'var(--font-mono)' }}>No incidents logged yet</div>
+          )}
         </div>
 
         <div className="glass-panel chart-card">
-          <div className="chart-title">Review status breakdown</div>
+          <div className="chart-title">Review status</div>
           <div className="donut-row">
-            <svg width="90" height="90" viewBox="0 0 90 90">
-              {donutData.map((d, idx) => {
-                const dash = (d.v/donutTotal)*219.9;
-                const el = <circle key={idx} cx="45" cy="45" r="35" fill="none"
-                  stroke={d.color} strokeWidth="16"
-                  strokeDasharray={`${dash} ${219.9-dash}`}
-                  strokeDashoffset={-donutOffset}
-                  transform="rotate(-90 45 45)" />;
-                donutOffset += dash;
+            <svg width="88" height="88" viewBox="0 0 90 90">
+              {donutRows.map((d, idx) => {
+                const dash = (d.v/dTotal)*dCirc;
+                const el = (
+                  <circle key={idx} cx="45" cy="45" r="35" fill="none"
+                    stroke={d.color} strokeWidth="16"
+                    strokeDasharray={`${dash} ${dCirc-dash}`}
+                    strokeDashoffset={-dOff}
+                    transform="rotate(-90 45 45)"/>
+                );
+                dOff += dash;
                 return el;
               })}
-              <circle cx="45" cy="45" r="22" fill="var(--surface)" />
+              <circle cx="45" cy="45" r="22" fill="var(--surface)"/>
               <text x="45" y="49" textAnchor="middle" fill="var(--text-primary)"
-                fontSize="11" fontFamily="'DM Mono',monospace" fontWeight="500">{total}</text>
+                fontSize="11" fontFamily="'DM Mono',monospace" fontWeight="500">{s.total||0}</text>
             </svg>
             <div className="donut-legend">
-              {donutData.map(d => (
+              {donutRows.map(d => (
                 <div key={d.label} className="legend-row">
-                  <span className="leg-dot" style={{ background:d.color }} />
+                  <span className="leg-dot" style={{ background:d.color }}/>
                   <span className="leg-label">{d.label}</span>
                   <span className="leg-val">{d.v}</span>
                 </div>
@@ -636,9 +692,48 @@ function AnalyticsDashboard({ incidents, cameras = [] }) {
         </div>
       </div>
 
+      {/* ── Row 3: Confidence histogram | Weekly bars ── */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+        <div className="glass-panel chart-card">
+          <div className="chart-title">AI confidence score distribution</div>
+          {confData.length > 0
+            ? <HBarGroup data={confData.map(b => ({ label:`${b.bucket}%`, count:b.count }))} labelKey="label" valKey="count" color="#f97316"/>
+            : <div style={{ color:'var(--text-muted)', fontSize:'0.62rem', fontFamily:'var(--font-mono)' }}>No confidence data recorded yet</div>
+          }
+        </div>
+
+        <div className="glass-panel chart-card">
+          <div className="chart-title">Weekly incident count — last 8 weeks</div>
+          {weeklyData.length > 0 ? (
+            <>
+              <VBars
+                data={weeklyData.map(w => ({ label:w.label, count:w.count }))}
+                valKey="count" labelKey="label" color="#3b82f6" h={76}
+              />
+              <div style={{ fontFamily:'var(--font-mono)', fontSize:'0.53rem', color:'var(--text-muted)', marginTop:8 }}>
+                This week: <span style={{ color:'var(--text-primary)' }}>{s.this_week||0}</span>
+                {' · '}Last week: <span style={{ color:'var(--text-primary)' }}>{s.last_week||0}</span>
+                {(s.avg_response_min||0) > 0 && ` · Avg review: ${s.avg_response_min}m`}
+              </div>
+            </>
+          ) : (
+            <div style={{ color:'var(--text-muted)', fontSize:'0.62rem', fontFamily:'var(--font-mono)' }}>
+              {busy ? 'Loading…' : 'No data yet'}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Footer ── */}
       <div className="analytics-footer">
         <button className="btn-export" onClick={exportCSV}>⬇ Export CSV</button>
-        <span className="analytics-note">{filtered.length} records · {range === 'all' ? 'All time' : `Last ${RANGES.find(r=>r.key===range)?.label}`} · Live SQLite sync</span>
+        <button className="btn-export" onClick={() => window.print()}
+          style={{ background:'var(--surface-3)', borderColor:'var(--border)', color:'var(--text-secondary)' }}>
+          ⎙ Print Report
+        </button>
+        <span className="analytics-note">
+          {s.total||0} records · {range} range · Generated {new Date().toLocaleString()}
+        </span>
       </div>
     </div>
   );
@@ -744,6 +839,10 @@ export default function App() {
   const [systemStatus,setSystemStatus]= useState('OFFLINE');
   const [alarmsArmed, setAlarmsArmed] = useState(false);
   const [incidents,   setIncidents]   = useState([]);
+  // Triage "clear" hides incidents older than this timestamp; analytics is unaffected
+  const [triageClearedBefore, setTriageClearedBefore] = useState(
+    () => localStorage.getItem('triageClearedBefore') || null
+  );
   const [confidence,  setConfidence]  = useState(0);
   const [threshold,   setThreshold]   = useState(60);
   const [activeTab,   setActiveTab]   = useState('MATRIX');
@@ -752,8 +851,11 @@ export default function App() {
   const [confHistory, setConfHistory] = useState([]);
   const [dbCameras,   setDbCameras]   = useState([]);
   const [camsLoaded,  setCamsLoaded]  = useState(false);
+  const [camStates,   setCamStates]   = useState({});
   const [showPushBanner, setShowPushBanner] = useState(false);
   const [soundMode,      setSoundMode]      = useState('siren');
+  const [streamErrors,   setStreamErrors]   = useState({});
+  const [streamRetryKeys,setStreamRetryKeys]= useState({});
   const [showFullMap,    setShowFullMap]    = useState(false);
 
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -764,10 +866,11 @@ export default function App() {
     isViolent, confidence, systemStatus, incidents, alarmsArmed,
   });
 
-  const audioCtxRef   = useRef(null);
-  const oscRef        = useRef(null);
-  const gainRef       = useRef(null);
-  const sirenTimerRef = useRef(null);
+  const audioCtxRef    = useRef(null);
+  const oscRef         = useRef(null);
+  const gainRef        = useRef(null);
+  const sirenTimerRef  = useRef(null);
+  const streamRetryRef = useRef({});  // camId → pending retry timer
 
   // ── Audio ──────────────────────────────────────────────────────────────────
   const stopSiren = useCallback(() => {
@@ -775,6 +878,13 @@ export default function App() {
     try { oscRef.current?.stop(); oscRef.current?.disconnect(); } catch {}
     try { gainRef.current?.disconnect(); } catch {}
     oscRef.current = null; gainRef.current = null;
+  }, []);
+
+  const retryStream = useCallback((camId) => {
+    clearTimeout(streamRetryRef.current[camId]);
+    delete streamRetryRef.current[camId];
+    setStreamErrors(prev => ({ ...prev, [camId]: false }));
+    setStreamRetryKeys(prev => ({ ...prev, [camId]: (prev[camId] || 0) + 1 }));
   }, []);
 
   const startSiren = useCallback(() => {
@@ -845,18 +955,30 @@ export default function App() {
     return () => clearInterval(t);
   }, [user]);
 
-  // ── Incident Polling ───────────────────────────────────────────────────────
+  // ── Incident Polling — always load when logged in, faster when armed ────────
   useEffect(() => {
-    if (!alarmsArmed || !user) return;
+    if (!user) return;
     const load = () => authFetch(`${API_BASE}/incidents`).then(r => r.json()).then(setIncidents).catch(() => {});
+    load();
+    const t = setInterval(load, alarmsArmed ? 2000 : 8000);
+    return () => clearInterval(t);
+  }, [user, alarmsArmed]);
+
+  // ── Per-camera state poll (status bar on each card) ───────────────────────
+  useEffect(() => {
+    const load = () =>
+      fetch(`${API_HOST}/api/camera_states`)
+        .then(r => r.ok ? r.json() : {})
+        .then(data => setCamStates(data))
+        .catch(() => {});
     load();
     const t = setInterval(load, 2000);
     return () => clearInterval(t);
-  }, [alarmsArmed, user]);
+  }, []);
 
-  // ── Threshold Sync ─────────────────────────────────────────────────────────
+  // ── Threshold Sync — both admin and operator can tune sensitivity ────────────
   useEffect(() => {
-    if (!alarmsArmed || !isAdmin) return;
+    if (!alarmsArmed) return;
     const t = setTimeout(() => {
       authFetch(`${API_BASE}/config/threshold`, {
         method:'POST', headers:{'Content-Type':'application/json'},
@@ -864,21 +986,22 @@ export default function App() {
       }).catch(() => {});
     }, 400);
     return () => clearTimeout(t);
-  }, [threshold, alarmsArmed, isAdmin]);
+  }, [threshold, alarmsArmed]);
 
   // ── Triage Action ──────────────────────────────────────────────────────────
   const handleTriageAction = useCallback(async (id, status) => {
     const payload = { status, reviewed_by: fullName || 'Operator', reviewed_at: new Date().toISOString() };
     setIncidents(prev => prev.map(i => i.id===id ? {...i, review_status:status, ...payload} : i));
-    authFetch(`${API_BASE}/incidents/${id}/status`, {
+    await authFetch(`${API_BASE}/incidents/${id}/status`, {
       method:'PATCH', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(payload),
     }).catch(() => {});
   }, [fullName]);
 
-  const handleClearIncidents = useCallback(async () => {
-    await authFetch(`${API_BASE}/admin/clear-incidents`, { method: 'DELETE' }).catch(() => {});
-    setIncidents([]);
+  const handleClearIncidents = useCallback(() => {
+    const now = new Date().toISOString();
+    localStorage.setItem('triageClearedBefore', now);
+    setTriageClearedBefore(now);
   }, []);
 
   // ── Auth guards ────────────────────────────────────────────────────────────
@@ -1049,64 +1172,113 @@ export default function App() {
                 </div>
               )}
               {camsLoaded && dbCameras.filter(c => c.is_active).map(cam => {
-                // AI cameras stream through backend inference endpoint
-                // HTTP cameras stream directly from their URL
-                const isAiFeed   = cam.id === 1;
-                const isHttpFeed = !cam.is_ai && cam.rtsp_url?.startsWith('http');
-                const isLive     = cam.is_ai || isHttpFeed;
-                const streamUrl  = cam.is_ai
-                  ? `${API_HOST}/api/video_feed/${cam.id}`
+                const isHttpFeed   = !cam.is_ai && cam.rtsp_url?.startsWith('http');
+                const isLive       = cam.is_ai || isHttpFeed;
+                // Always route live feeds through backend — handles MJPEG, snapshot polling,
+                // reconnect logic. Direct URL load was causing blank for HTTP phone cameras.
+                const retryKey     = streamRetryKeys[cam.id] || 0;
+                const streamUrl    = isLive
+                  ? `${API_HOST}/api/video_feed/${cam.id}${retryKey ? `?r=${retryKey}` : ''}`
                   : cam.rtsp_url;
-                const statusLabel = isAiFeed
-                  ? (isViolent ? '⚠ VIOLENCE' : systemStatus)
-                  : (cam.is_ai ? 'AI ACTIVE' : 'LIVE FEED');
+
+                // Per-camera AI state from backend
+                const camState     = camStates[String(cam.id)];
+                const camStatus    = camState?.status || '';
+                const camConf      = Math.round((camState?.confidence || 0) * 100);
+                const isCamViolent = camStatus.includes('VIOLENCE');
+                const statusLabel  = cam.is_ai
+                  ? (isCamViolent ? '⚠ VIOLENCE' : (camStatus || 'AI ACTIVE'))
+                  : 'LIVE FEED';
+                const isConnecting = camStatus.includes('Waiting') || camStatus.includes('Connecting') || camStatus.includes('SNAP');
+                const isError      = camStatus.includes('ERROR') || camStatus.includes('failed');
+                const isMonitor    = camStatus.includes('MONITORING') || camStatus.includes('VIOLENCE');
+                const barColor     = isError ? '#dc2626' : isConnecting ? '#f59e0b' : isMonitor ? '#22c55e' : '#64748b';
+                const barLabel     = isError ? 'STREAM ERROR' : isConnecting ? 'CONNECTING…' : isMonitor ? 'STREAMING' : camStatus || 'WAITING';
+
                 return (
                   <div key={cam.id}
                     className={`matrix-cell glass-panel
                       ${focusedCam===cam.id ? 'cell-focused':''}
-                      ${isAiFeed&&isViolent ? 'cell-threat pulse-border':''}`}
+                      ${cam.is_ai&&isCamViolent ? 'cell-threat pulse-border':''}`}
                     onClick={() => setFocusedCam(cam.id)}>
                     <div className="cell-hdr">
                       <div className="cell-hdr-left">
                         <span className="cam-id">{cam.name}</span>
                         <span className="cam-loc">{cam.location}</span>
                       </div>
-                      <span className={`ai-pill ${isAiFeed&&isViolent ? 'pill-red' : isLive ? 'pill-green' : 'pill-gray'}`}>
-                        {statusLabel}
-                      </span>
+                      <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+                        {isLive && (
+                          <button
+                            title="Refresh stream"
+                            onClick={e => { e.stopPropagation(); retryStream(cam.id); }}
+                            style={{ background:'none', border:'none', cursor:'pointer', padding:'1px 3px', color:'var(--text-muted)', fontSize:'0.85rem', lineHeight:1, borderRadius:3, transition:'color 0.15s' }}
+                            onMouseEnter={e => e.currentTarget.style.color='var(--text-primary)'}
+                            onMouseLeave={e => e.currentTarget.style.color='var(--text-muted)'}
+                          >⟳</button>
+                        )}
+                        <span className={`ai-pill ${cam.is_ai&&isCamViolent ? 'pill-red' : isLive ? 'pill-green' : 'pill-gray'}`}>
+                          {statusLabel}
+                        </span>
+                      </div>
                     </div>
+                    {/* Connection status bar */}
+                    {cam.is_ai && (
+                      <div className="cam-status-bar">
+                        <span className="cam-status-dot" style={{ background: barColor, boxShadow: isConnecting ? `0 0 6px ${barColor}` : 'none' }} />
+                        <span className="cam-status-txt" style={{ color: barColor }}>{barLabel}</span>
+                        {isConnecting && <span className="cam-status-spinner" />}
+                      </div>
+                    )}
                     <div className="cell-video">
                       {isLive ? (
                         <>
-                          <img src={streamUrl} alt={`${cam.name} feed`} className="matrix-feed"
-                            onError={e => { e.target.style.display='none'; e.target.nextSibling?.style && (e.target.nextSibling.style.display='flex'); }}
-                          />
-                          <div className="matrix-sim" style={{ display:'none', background:'#0f172a' }}>
-                            <span className="sim-txt">STREAM OFFLINE</span>
-                          </div>
-                          {isAiFeed && (
-                            <div className="conf-overlay">
-                              <ConfidenceArc value={confidence} threshold={threshold} size={70} />
+                          {streamErrors[cam.id] ? (
+                            <div className="matrix-sim" style={{ background:'#0f172a', flexDirection:'column', gap:8 }}>
+                              <span className="sim-txt">STREAM OFFLINE</span>
+                              <button
+                                onClick={e => { e.stopPropagation(); retryStream(cam.id); }}
+                                style={{ fontFamily:'var(--font-mono)', fontSize:'0.58rem', letterSpacing:'1px', padding:'3px 10px', background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.15)', borderRadius:4, color:'var(--text-secondary)', cursor:'pointer' }}
+                              >↻ RECONNECT</button>
                             </div>
-                          )}
-                          <div className="xh xh-tl"/><div className="xh xh-tr"/>
-                          <div className="xh xh-bl"/><div className="xh xh-br"/>
-                          {isAiFeed && isViolent && (
-                            <div className="threat-overlay">
-                              <span className="threat-label">⚠ VIOLENCE DETECTED</span>
-                            </div>
+                          ) : (
+                            <>
+                              <img
+                                src={streamUrl}
+                                alt={`${cam.name} feed`}
+                                className="matrix-feed"
+                                onError={() => {
+                                  setStreamErrors(prev => ({ ...prev, [cam.id]: true }));
+                                  clearTimeout(streamRetryRef.current[cam.id]);
+                                  streamRetryRef.current[cam.id] = setTimeout(() => retryStream(cam.id), 4000);
+                                }}
+                              />
+                              {cam.is_ai && (
+                                <div className="conf-overlay">
+                                  <ConfidenceArc value={camConf} threshold={threshold} size={70} />
+                                </div>
+                              )}
+                              <div className="xh xh-tl"/><div className="xh xh-tr"/>
+                              <div className="xh xh-bl"/><div className="xh xh-br"/>
+                              {cam.is_ai && isCamViolent && (
+                                <div className="threat-overlay">
+                                  <span className="threat-label">⚠ VIOLENCE DETECTED</span>
+                                </div>
+                              )}
+                            </>
                           )}
                         </>
                       ) : (
-                        <div className="matrix-sim" style={{ background:'#1e293b' }}>
-                          <span className="sim-txt">RTSP / NO PREVIEW</span>
+                        <div className="matrix-sim" style={{ background:'#1e293b', flexDirection:'column', gap:6 }}>
+                          <span className="sim-txt">RTSP CAMERA</span>
+                          <span style={{ fontSize:'0.58rem', color:'var(--text-muted)', fontFamily:'var(--font-mono)', textAlign:'center' }}>
+                            Enable AI Inference in camera settings to preview this feed
+                          </span>
                         </div>
                       )}
                     </div>
                     <div className="cell-ftr">
                       <span className="cell-zone">{cam.zone}</span>
-                      {isAiFeed && <span className="cell-thr">THR {threshold}%</span>}
-                      {cam.is_ai && !isAiFeed && <span className="cell-thr">AI ENABLED</span>}
+                      {cam.is_ai && <span className="cell-thr">THR {threshold}%</span>}
                     </div>
                   </div>
                 );
@@ -1124,7 +1296,11 @@ export default function App() {
             <div className="glass-panel conf-panel">
               <div className="panel-header">
                 <span className="panel-title">AI CONFIDENCE MONITOR</span>
-                <span className="pill-mono pill-cyan">CAM-01</span>
+                <span className="pill-mono pill-cyan">
+                  {dbCameras.filter(c => c.is_ai && c.is_active).length > 1
+                    ? `${dbCameras.filter(c => c.is_ai && c.is_active).length} AI CAMS`
+                    : 'CAM-01'}
+                </span>
               </div>
               <div className="conf-row">
                 <ConfidenceArc value={confidence} threshold={threshold} size={90} />
@@ -1167,7 +1343,8 @@ export default function App() {
 
             {/* Triage — both roles */}
             <IncidentTriagePanel incidents={incidents} onAction={handleTriageAction}
-              alarmsArmed={alarmsArmed} isAdmin={isAdmin} onClearIncidents={handleClearIncidents} />
+              alarmsArmed={alarmsArmed} isAdmin={isAdmin} onClearIncidents={handleClearIncidents}
+              clearedBefore={triageClearedBefore} />
           </aside>
         </div>
       )}

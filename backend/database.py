@@ -30,6 +30,8 @@ def init_db():
     """Create tables, seed data, run migrations, and build indexes."""
     print("Checking Database Integrity...")
     conn   = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     cursor = conn.cursor()
 
     cursor.execute('''

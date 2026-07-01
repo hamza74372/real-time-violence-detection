@@ -42,10 +42,20 @@ async def get_status():
 
     if not camera_states:
         return {"status": global_system_status, "confidence": round(global_confidence, 4)}
-    # Surface violence from any camera first
     for state in camera_states.values():
         if "VIOLENCE" in state["status"]:
             return {"status": state["status"], "confidence": round(state["confidence"], 4)}
-    # Otherwise return CAM-01 status (or first available)
     state = camera_states.get(1) or next(iter(camera_states.values()))
     return {"status": state["status"], "confidence": round(state["confidence"], 4)}
+
+
+@router.get("/camera_states")
+async def get_camera_states():
+    """Returns per-camera stream status. Public — used by frontend status bars."""
+    return {
+        str(cam_id): {
+            "status":     state["status"],
+            "confidence": round(state["confidence"], 4),
+        }
+        for cam_id, state in camera_states.items()
+    }

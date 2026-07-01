@@ -26,11 +26,13 @@ VIDEO_FPS            = int(os.getenv("VIDEO_FPS", "30"))
 
 # AI detection thresholds
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.75"))
-VOTES_NEEDED         = int(os.getenv("VOTES_NEEDED", "3"))
+VOTES_NEEDED         = int(os.getenv("VOTES_NEEDED", "4"))
 SMOOTHING_ALPHA      = float(os.getenv("SMOOTHING_ALPHA", "0.3"))
 LOG_COOLDOWN         = int(os.getenv("LOG_COOLDOWN", "10"))
 INFERENCE_STRIDE     = int(os.getenv("INFERENCE_STRIDE", "5"))
-SEQUENCE_LEN         = int(os.getenv("SEQUENCE_LEN", "30"))
+SEQUENCE_LEN         = int(os.getenv("SEQUENCE_LEN", "20"))
+POSE_FIGHT_THRESHOLD = float(os.getenv("POSE_FIGHT_THRESHOLD", "0.72"))
+VELOCITY_GATE        = float(os.getenv("VELOCITY_GATE", "20.0"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SERVER / CORS
