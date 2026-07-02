@@ -61,9 +61,12 @@ camera_states: dict  = {}
 def _pose_fight_score(pose_results, prev_kpts_list: list) -> tuple:
     """
     Geometric fight detector. Returns (score 0-1, updated_kpts_list).
-    Velocity is checked FIRST as a hard gate — if wrists are barely moving
-    the scene cannot be a fight, so we return 0.0 immediately.
-    This prevents false positives when two people simply stand near each other.
+
+    Key design decisions to avoid false positives in crowds:
+    - Per-person velocity tracked individually (not global max)
+    - 3+ people in frame: require at least 2 people actively moving
+    - Proximity only counted between pairs where at least one person is moving
+    - Velocity score uses average of top-2 people, not single max
     """
     kpts_data = pose_results[0].keypoints
     boxes_obj = pose_results[0].boxes
@@ -75,32 +78,45 @@ def _pose_fight_score(pose_results, prev_kpts_list: list) -> tuple:
     if len(kpts_np) < 2:
         return 0.0, []
 
-    # ── Velocity gate (must pass before anything else counts) ────────────────
-    max_vel = 0.0
+    # ── Per-person wrist velocity ─────────────────────────────────────────────
+    per_vel = [0.0] * len(kpts_np)
     if prev_kpts_list:
         try:
             prev = np.array(prev_kpts_list)
             for i in range(min(len(kpts_np), len(prev))):
                 if prev[i].shape[0] < 11:
                     continue
-                for idx in [9, 10]:          # left wrist, right wrist
+                for idx in [9, 10]:   # left wrist, right wrist
                     px, py = prev[i][idx][0], prev[i][idx][1]
                     cx, cy = kpts_np[i][idx][0], kpts_np[i][idx][1]
                     if cx > 1 and cy > 1 and px > 1 and py > 1:
-                        max_vel = max(max_vel, ((cx-px)**2 + (cy-py)**2)**0.5)
+                        per_vel[i] = max(per_vel[i],
+                                         ((cx-px)**2 + (cy-py)**2)**0.5)
         except Exception:
             pass
 
-    # Below VELOCITY_GATE px/frame → no meaningful movement → not a fight
+    max_vel = max(per_vel) if per_vel else 0.0
+
+    # Gate 1: fastest wrist must exceed threshold
     if max_vel < VELOCITY_GATE:
         return 0.0, kpts_np.tolist()
 
+    # Gate 2: with 3+ people, require at least 2 actively moving
+    # (prevents one person gesturing/walking from triggering in a crowd)
+    if len(kpts_np) >= 3:
+        active_movers = sum(1 for v in per_vel if v >= VELOCITY_GATE * 0.5)
+        if active_movers < 2:
+            return 0.0, kpts_np.tolist()
+
     score = 0.0
 
-    # ── Proximity (max 0.20) ──────────────────────────────────────────────────
+    # ── Proximity (max 0.20) — only between pairs involving a moving person ───
     best_prox = 0.0
     for i in range(len(boxes_np)):
         for j in range(i + 1, len(boxes_np)):
+            # Skip pairs where neither person is moving
+            if per_vel[i] < VELOCITY_GATE * 0.3 and per_vel[j] < VELOCITY_GATE * 0.3:
+                continue
             b1, b2 = boxes_np[i], boxes_np[j]
             c1x = (b1[0]+b1[2])/2;  c1y = (b1[1]+b1[3])/2
             c2x = (b2[0]+b2[2])/2;  c2y = (b2[1]+b2[3])/2
@@ -125,8 +141,12 @@ def _pose_fight_score(pose_results, prev_kpts_list: list) -> tuple:
     if len(kpts_np) > 0:
         score += min(raised / len(kpts_np), 1.0) * 0.20
 
-    # ── Wrist velocity (max 0.60) ─────────────────────────────────────────────
-    score += min(max_vel / 50.0, 1.0) * 0.60
+    # ── Velocity score: average of top-2 people (max 0.60) ───────────────────
+    # Using top-2 average instead of single max prevents one fast person
+    # from driving the entire 60% weight in a crowd
+    top2 = sorted(per_vel, reverse=True)[:2]
+    avg_top2 = sum(top2) / len(top2)
+    score += min(avg_top2 / 50.0, 1.0) * 0.60
 
     return min(score, 1.0), kpts_np.tolist()
 
