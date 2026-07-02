@@ -463,30 +463,51 @@ class CameraSession:
         self._frame_q.put(None)
 
     def _http_capture_loop(self):
-        """HTTP phone camera loop — tries MJPEG, falls back to snapshot, retries forever."""
+        """HTTP phone camera loop — tries MJPEG via requests, falls back to snapshot."""
         base      = self.source.rstrip('/')
         video_url = base if base.endswith('/video') else base + '/video'
 
         while True:
-            # ── Attempt 1: OpenCV MJPEG (/video) ────────────────────────────
-            cap_http = cv2.VideoCapture(video_url)
-            cap_http.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            # ── Attempt 1: requests-based MJPEG (/video) ────────────────────
+            # cv2.VideoCapture is unreliable for HTTP MJPEG on Windows —
+            # it reports isOpened()=True but decodes 0 frames silently.
+            # Direct byte-stream parsing with requests is always reliable.
             got_any = False
-            if cap_http.isOpened():
+            camera_states[self.cam_id]["status"] = "Connecting..."
+            try:
+                resp = requests.get(video_url, stream=True, timeout=(5, 15))
+                resp.raise_for_status()
                 camera_states[self.cam_id]["status"] = "MONITORING"
-                for frame in _cap_iter(cap_http):
-                    got_any = True
-                    self._encode_and_store(frame)
-            cap_http.release()
+                buf = b''
+                for chunk in resp.iter_content(chunk_size=8192):
+                    if not chunk:
+                        continue
+                    buf += chunk
+                    # Parse complete JPEGs by SOI/EOI byte markers
+                    while True:
+                        start = buf.find(b'\xff\xd8')
+                        end   = buf.find(b'\xff\xd9', start + 2) if start != -1 else -1
+                        if start == -1 or end == -1:
+                            break
+                        jpg_bytes = buf[start:end + 2]
+                        buf       = buf[end + 2:]
+                        arr   = np.frombuffer(jpg_bytes, dtype=np.uint8)
+                        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                        if frame is not None:
+                            got_any = True
+                            self._encode_and_store(frame)
+            except Exception as e:
+                if not got_any:
+                    print(f"[HTTP-{self.cam_id}] MJPEG failed: {e}")
 
             if got_any:
-                # Was working, then dropped — show reconnecting and retry MJPEG
+                # Stream was working then dropped — show reconnecting, retry
                 camera_states[self.cam_id]["status"] = "Reconnecting..."
                 f = _make_connecting_frame(f"CAM-{self.cam_id:02d}")
-                ret, buf = cv2.imencode('.jpg', f)
+                ret, buf2 = cv2.imencode('.jpg', f)
                 if ret:
                     with self._jpg_lock:
-                        self._latest_jpg = buf.tobytes()
+                        self._latest_jpg = buf2.tobytes()
                 time.sleep(2)
                 continue
 
@@ -494,8 +515,6 @@ class CameraSession:
             camera_states[self.cam_id]["status"] = "SNAP"
             for frame in _iter_http_snapshot(self.source):
                 self._encode_and_store(frame)
-            # _iter_http_snapshot only exits if the source is permanently broken;
-            # sleep briefly then retry MJPEG in case phone reconnected
             time.sleep(3)
 
     def _encode_and_store(self, frame):
